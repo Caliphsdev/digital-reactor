@@ -29,11 +29,10 @@ import qtawesome as qta
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QLabel, QDoubleSpinBox, QLineEdit, QComboBox, QCheckBox,
-    QPushButton, QDateEdit, QFrame,
+    QPushButton, QDateEdit, QFrame, QScrollArea, QSplitter,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QSizePolicy, QMessageBox,
 )
-from ui.docking_utils import make_inner_window, make_dock, make_dock_toolbar
 from PySide6.QtCore import Qt, QDate, QSize
 from PySide6.QtGui import QFont, QColor, QBrush
 from PySide6.QtCharts import (
@@ -42,6 +41,7 @@ from PySide6.QtCharts import (
 
 from core.database import get_session
 from core.models import Experiment, CECReading
+from ui.theme import dark_date_edit_style
 
 
 # ── Sampling point definitions ─────────────────────────────────────────────────
@@ -71,8 +71,6 @@ class CECTrackerScreen(QWidget):
 
         # sp_key → {spin, bdl_check, det_spin}
         self._sp_widgets: dict[str, dict] = {}
-        # Guard so resizeDocks() only runs once after the window is shown
-        self._docks_sized = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -81,35 +79,62 @@ class CECTrackerScreen(QWidget):
         root.addWidget(self._build_header())
         root.addWidget(self._build_info_strip())
 
-        # Inner QMainWindow manages the three dockable panels.
-        # Qt.WindowType.Widget keeps it embedded — not a standalone OS window.
-        self._inner_mw = make_inner_window()
+        # ── Layout: horizontal splitter for panels; fixed-height history below.
+        # Vertical sizing is fixed (no vertical splitter) — QScrollArea provides
+        # overflow scrolling if the window is too short.
 
-        # Minimal central placeholder — the three docks fill all visible space
-        central = QWidget()
-        central.setStyleSheet("background:#f5f6fa;")
-        self._inner_mw.setCentralWidget(central)
+        # Horizontal splitter: entry form | results panel (user drags left/right)
+        top = QSplitter(Qt.Horizontal)
+        top.setChildrenCollapsible(False)
+        top.setHandleWidth(4)
+        top.setStyleSheet("QSplitter::handle { background: #dfe6e9; }")
+        top.addWidget(self._panel_card("CEC Entry Form",     self._build_entry_form()))
+        top.addWidget(self._panel_card("Removal Efficiency", self._build_results_panel()))
+        top.setSizes([480, 420])
+        top.setMinimumHeight(420)
 
-        # Build docks from the existing panel builder methods
-        self._dock_form    = make_dock("CEC Entry Form",     self._build_entry_form())
-        self._dock_results = make_dock("Removal Efficiency", self._build_results_panel())
-        self._dock_history = make_dock("Reading History",    self._build_history_section())
+        # History table — fixed height, no vertical resizing
+        history_card = self._panel_card("Reading History", self._build_history_section())
+        history_card.setFixedHeight(240)
 
-        self._inner_mw.addDockWidget(Qt.LeftDockWidgetArea,   self._dock_form)
-        self._inner_mw.addDockWidget(Qt.RightDockWidgetArea,  self._dock_results)
-        self._inner_mw.addDockWidget(Qt.BottomDockWidgetArea, self._dock_history)
+        # Stack them in a plain widget
+        body = QWidget()
+        body_vl = QVBoxLayout(body)
+        body_vl.setContentsMargins(0, 0, 0, 0)
+        body_vl.setSpacing(2)
+        body_vl.addWidget(top, stretch=1)
+        body_vl.addWidget(history_card)
 
-        # History dock spans the full width of the bottom area
-        self._inner_mw.setCorner(Qt.BottomLeftCorner,  Qt.BottomDockWidgetArea)
-        self._inner_mw.setCorner(Qt.BottomRightCorner, Qt.BottomDockWidgetArea)
+        # Scroll area: vertical scroll if window too short, never horizontal
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(body)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setFrameShape(QFrame.NoFrame)
 
-        # Compact toolbar with one toggle button per dock (hide / restore)
-        make_dock_toolbar(
-            self._inner_mw,
-            [self._dock_form, self._dock_results, self._dock_history],
-        )
+        root.addWidget(scroll, stretch=1)
 
-        root.addWidget(self._inner_mw, stretch=1)
+    # ── Panel card wrapper ─────────────────────────────────────────────────────
+    def _panel_card(self, title: str, widget: QWidget) -> QWidget:
+        """Wrap a panel widget with a dark title bar — replaces QDockWidget header."""
+        card = QWidget()
+        card.setStyleSheet("background: #f5f6fa;")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        hdr = QWidget()
+        hdr.setFixedHeight(30)
+        hdr.setStyleSheet(f"background: {C_HDR}; border-bottom: 1px solid #3d5166;")
+        hrow = QHBoxLayout(hdr)
+        hrow.setContentsMargins(12, 0, 12, 0)
+        lbl = QLabel(title)
+        lbl.setStyleSheet("color: #ecf0f1; font-size: 11px; font-weight: 600;")
+        hrow.addWidget(lbl)
+        hrow.addStretch()
+        layout.addWidget(hdr)
+        layout.addWidget(widget, stretch=1)
+        return card
 
     # ── Header ─────────────────────────────────────────────────────────────────
     def _build_header(self) -> QWidget:
@@ -137,11 +162,7 @@ class CECTrackerScreen(QWidget):
         self._date_edit.setDisplayFormat("yyyy-MM-dd")
         self._date_edit.setFixedHeight(30)
         self._date_edit.setFixedWidth(130)
-        self._date_edit.setStyleSheet("""
-            QDateEdit { background:#3d5166; color:#ecf0f1;
-                border:1px solid #566573; border-radius:4px;
-                padding:2px 6px; font-size:11px; }
-        """)
+        self._date_edit.setStyleSheet(dark_date_edit_style())
         row.addWidget(self._date_edit)
 
         self._save_btn = QPushButton("  Save CEC Readings")
@@ -688,17 +709,6 @@ class CECTrackerScreen(QWidget):
         self._save_msg.setText("")
         self._get_active_experiment()
         self._refresh_history()
-        # Set initial dock proportions once the window has been laid out.
-        # resizeDocks() has no effect before the widget is visible, so we guard
-        # with _docks_sized and call it here on first show.
-        if not self._docks_sized:
-            self._inner_mw.resizeDocks(
-                [self._dock_history], [220], Qt.Vertical,
-            )
-            self._inner_mw.resizeDocks(
-                [self._dock_form, self._dock_results], [480, 540], Qt.Horizontal,
-            )
-            self._docks_sized = True
 
     # ── Style helpers ──────────────────────────────────────────────────────────
     @staticmethod

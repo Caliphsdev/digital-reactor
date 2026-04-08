@@ -22,10 +22,9 @@ import qtawesome as qta
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QLabel, QSlider, QDoubleSpinBox, QComboBox, QPushButton,
-    QFrame, QSizePolicy, QTableWidget,
+    QFrame, QSizePolicy, QSplitter, QTableWidget,
     QTableWidgetItem, QHeaderView, QAbstractItemView, QMessageBox,
 )
-from ui.docking_utils import make_inner_window, make_dock, make_dock_toolbar
 from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QFont, QColor, QBrush
 from PySide6.QtCharts import (
@@ -62,35 +61,20 @@ class SimulationScreen(QWidget):
         self._debounce.setInterval(150)
         self._debounce.timeout.connect(self._recalculate)
 
-        # Guard so resizeDocks() only runs once after the window is visible
-        self._docks_sized = False
-
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
         root.addWidget(self._build_header())
 
-        # Inner QMainWindow manages the two dockable panels.
-        # Qt.WindowType.Widget keeps it embedded — not a standalone OS window.
-        self._inner_mw = make_inner_window()
+        # Horizontal splitter: inputs (left) | results (right)
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self._panel_card("Operating Parameters", self._build_inputs_panel()))
+        splitter.addWidget(self._panel_card("Predicted Results",    self._build_results_panel()))
+        splitter.setSizes([460, 580])
 
-        # Minimal central placeholder — docks fill the visible area
-        central = QWidget()
-        central.setStyleSheet("background:#f5f6fa;")
-        self._inner_mw.setCentralWidget(central)
-
-        # Build docks from the existing panel builder methods
-        self._dock_inputs  = make_dock("Operating Parameters", self._build_inputs_panel())
-        self._dock_results = make_dock("Predicted Results",    self._build_results_panel())
-
-        self._inner_mw.addDockWidget(Qt.LeftDockWidgetArea,  self._dock_inputs)
-        self._inner_mw.addDockWidget(Qt.RightDockWidgetArea, self._dock_results)
-
-        # Compact toolbar with one toggle button per dock (hide / restore)
-        make_dock_toolbar(self._inner_mw, [self._dock_inputs, self._dock_results])
-
-        root.addWidget(self._inner_mw, stretch=1)
+        root.addWidget(splitter, stretch=1)
 
         # Run initial calculation with default values
         QTimer.singleShot(0, self._recalculate)
@@ -532,15 +516,30 @@ class SimulationScreen(QWidget):
     # ── Lifecycle ──────────────────────────────────────────────────────────────
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        # Set initial dock widths once the window has been laid out.
-        # Calling resizeDocks() before the widget is visible has no effect.
-        if not self._docks_sized:
-            self._inner_mw.resizeDocks(
-                [self._dock_inputs, self._dock_results], [460, 580], Qt.Horizontal,
-            )
-            self._docks_sized = True
 
     # ── Style helpers ──────────────────────────────────────────────────────────
+    def _panel_card(self, title: str, widget: QWidget) -> QWidget:
+        """Wrap a widget in a titled panel with a dark header bar."""
+        outer = QWidget()
+        outer.setStyleSheet("background:#ffffff; border:1px solid #dde1e7;")
+        vl = QVBoxLayout(outer)
+        vl.setContentsMargins(0, 0, 0, 0)
+        vl.setSpacing(0)
+        hdr = QWidget()
+        hdr.setFixedHeight(30)
+        hdr.setStyleSheet("background:#2c3e50; border:none;")
+        hl = QHBoxLayout(hdr)
+        hl.setContentsMargins(12, 0, 12, 0)
+        lbl = QLabel(title)
+        lbl.setStyleSheet(
+            "color:#ecf0f1; font-size:10px; font-weight:600;"
+            " border:none; background:transparent;"
+        )
+        hl.addWidget(lbl)
+        vl.addWidget(hdr)
+        vl.addWidget(widget, stretch=1)
+        return outer
+
     @staticmethod
     def _make_card() -> QWidget:
         w = QWidget()

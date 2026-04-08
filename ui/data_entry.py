@@ -32,6 +32,7 @@ from PySide6.QtGui import QFont, QColor, QBrush
 
 from core.database import get_session
 from core.models import Experiment, DailyReading, FlowReading
+from ui.theme import dark_date_edit_style
 
 
 # ── Zone and field definitions ─────────────────────────────────────────────────
@@ -235,13 +236,7 @@ class DataEntryScreen(QWidget):
         self._date_edit.setDisplayFormat("yyyy-MM-dd")
         self._date_edit.setFixedHeight(30)
         self._date_edit.setFixedWidth(130)
-        self._date_edit.setStyleSheet("""
-            QDateEdit {
-                background: #3d5166; color: #ecf0f1;
-                border: 1px solid #566573; border-radius: 4px;
-                padding: 2px 6px; font-size: 11px;
-            }
-        """)
+        self._date_edit.setStyleSheet(dark_date_edit_style())
         self._date_edit.dateChanged.connect(self._on_date_changed)
         row.addWidget(self._date_edit)
 

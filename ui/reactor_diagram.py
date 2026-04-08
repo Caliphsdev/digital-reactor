@@ -54,9 +54,9 @@ C_TEXT_ZONE  = QColor("#ffffff")
 C_OVERLAY_BG = QColor(255, 255, 255, 195)
 
 # ── Animation constants ────────────────────────────────────────────────────────
-TIMER_MS       = 50        # ~20 fps — smooth particle movement
-PARTICLE_SPEED = 0.022     # fraction of path traversed per tick
-N_PARTICLES    = 3         # particles per pipe segment
+TIMER_MS       = 66        # ~15 fps — imperceptibly different, 25% fewer callbacks
+PARTICLE_SPEED = 0.025     # slightly faster step to compensate for lower fps
+N_PARTICLES    = 2         # particles per pipe segment (was 3 — reduce CPU load)
 
 # Tail: list of (t_offset_behind, opacity, radius_px)
 TAIL = [(0.0, 1.00, 4.5), (PARTICLE_SPEED, 0.45, 3.2), (PARTICLE_SPEED * 2, 0.18, 2.0)]
@@ -109,6 +109,15 @@ class ReactorDiagram(QWidget):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._load_today_data()
+        # Restart timer only when the diagram is actually on screen.
+        # When hidden (other screens active) the timer is stopped so it doesn't
+        # fire paintEvent callbacks 15x/sec while the user is elsewhere.
+        if not self._timer.isActive():
+            self._timer.start(TIMER_MS)
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._timer.stop()
 
     # ── Database ───────────────────────────────────────────────────────────────
     def _load_today_data(self) -> None:

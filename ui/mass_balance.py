@@ -28,10 +28,9 @@ import qtawesome as qta
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QDateEdit, QFrame,
-    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QScrollArea, QSplitter, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
     QSizePolicy, QMessageBox, QFileDialog,
 )
-from ui.docking_utils import make_inner_window, make_dock, make_dock_toolbar
 from PySide6.QtCore import Qt, QDate, QSize, QMargins
 from PySide6.QtGui import QFont, QColor, QBrush
 from PySide6.QtCharts import (
@@ -41,6 +40,7 @@ from PySide6.QtCharts import (
 from core.database import get_session
 from core.models import Experiment, CECReading, FlowReading, MassBalanceResult
 from core.calculations import full_mass_balance
+from ui.theme import dark_date_edit_style
 
 C_HDR = "#2c3e50"
 
@@ -54,8 +54,6 @@ class MassBalanceScreen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._results: list[dict] = []   # last calculated results
-        # Guard so resizeDocks() only runs once after the window is visible
-        self._docks_sized = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -64,36 +62,36 @@ class MassBalanceScreen(QWidget):
         root.addWidget(self._build_header())
         root.addWidget(self._build_info_strip())
 
-        # Inner QMainWindow manages the three dockable panels.
-        # Qt.WindowType.Widget keeps it embedded — not a standalone OS window.
-        self._inner_mw = make_inner_window()
+        # Horizontal splitter: equation workings | fate chart (user drags left/right)
+        top = QSplitter(Qt.Horizontal)
+        top.setChildrenCollapsible(False)
+        top.addWidget(self._panel_card("Equation Workings", self._build_equation_panel()))
+        top.addWidget(self._panel_card("Fate Breakdown",    self._build_fate_panel()))
+        top.setSizes([540, 480])
+        top.setMinimumHeight(380)
 
-        # Minimal central placeholder — docks fill all visible space
-        central = QWidget()
-        central.setStyleSheet("background:#f5f6fa;")
-        self._inner_mw.setCentralWidget(central)
+        # Results table — fixed height, no vertical resizing
+        results_card = self._panel_card("All CEC Results", self._build_results_table())
+        results_card.setFixedHeight(260)
 
-        # Build docks from the existing panel builder methods
-        self._dock_eq      = make_dock("Equation Workings", self._build_equation_panel())
-        self._dock_fate    = make_dock("Fate Breakdown",    self._build_fate_panel())
-        self._dock_results = make_dock("All CEC Results",   self._build_results_table())
+        # Stack in a plain widget — no vertical splitter
+        body = QWidget()
+        body_vl = QVBoxLayout(body)
+        body_vl.setContentsMargins(0, 0, 0, 0)
+        body_vl.setSpacing(2)
+        body_vl.addWidget(top, stretch=1)
+        body_vl.addWidget(results_card)
 
-        self._inner_mw.addDockWidget(Qt.LeftDockWidgetArea,   self._dock_eq)
-        self._inner_mw.addDockWidget(Qt.RightDockWidgetArea,  self._dock_fate)
-        self._inner_mw.addDockWidget(Qt.BottomDockWidgetArea, self._dock_results)
+        # Scroll area: vertical scroll if window too short, never horizontal
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(body)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setFrameShape(QFrame.NoFrame)
 
-        # Results table spans the full width of the bottom area
-        self._inner_mw.setCorner(Qt.BottomLeftCorner,  Qt.BottomDockWidgetArea)
-        self._inner_mw.setCorner(Qt.BottomRightCorner, Qt.BottomDockWidgetArea)
-
-        # Compact toolbar with one toggle button per dock (hide / restore)
-        make_dock_toolbar(
-            self._inner_mw,
-            [self._dock_eq, self._dock_fate, self._dock_results],
-        )
-
-        root.addWidget(self._inner_mw, stretch=1)
-        # Export bar stays outside the dock system — always accessible
+        root.addWidget(scroll, stretch=1)
+        # Export bar stays outside the scroll area — always accessible
         root.addWidget(self._build_export_bar())
 
     # ── Header ─────────────────────────────────────────────────────────────────
@@ -121,11 +119,7 @@ class MassBalanceScreen(QWidget):
         self._date_edit.setDisplayFormat("yyyy-MM-dd")
         self._date_edit.setFixedHeight(30)
         self._date_edit.setFixedWidth(130)
-        self._date_edit.setStyleSheet("""
-            QDateEdit { background:#3d5166; color:#ecf0f1;
-                border:1px solid #566573; border-radius:4px;
-                padding:2px 6px; font-size:11px; }
-        """)
+        self._date_edit.setStyleSheet(dark_date_edit_style())
         row.addWidget(self._date_edit)
 
         calc_btn = QPushButton("  Calculate")
@@ -596,18 +590,30 @@ class MassBalanceScreen(QWidget):
         else:
             self._info_label.setText("No active experiment — go to Experiments first.")
             self._info_label.setStyleSheet("color:#e74c3c; font-size:11px;")
-        # Set initial dock proportions once the window has been laid out.
-        # resizeDocks() has no effect before the widget is visible.
-        if not self._docks_sized:
-            self._inner_mw.resizeDocks(
-                [self._dock_results], [200], Qt.Vertical,
-            )
-            self._inner_mw.resizeDocks(
-                [self._dock_eq, self._dock_fate], [540, 480], Qt.Horizontal,
-            )
-            self._docks_sized = True
 
     # ── Style helpers ──────────────────────────────────────────────────────────
+    def _panel_card(self, title: str, widget: QWidget) -> QWidget:
+        """Wrap a widget in a titled panel with a dark header bar."""
+        outer = QWidget()
+        outer.setStyleSheet("background:#ffffff; border:1px solid #dde1e7;")
+        vl = QVBoxLayout(outer)
+        vl.setContentsMargins(0, 0, 0, 0)
+        vl.setSpacing(0)
+        hdr = QWidget()
+        hdr.setFixedHeight(30)
+        hdr.setStyleSheet("background:#2c3e50; border:none;")
+        hl = QHBoxLayout(hdr)
+        hl.setContentsMargins(12, 0, 12, 0)
+        lbl = QLabel(title)
+        lbl.setStyleSheet(
+            "color:#ecf0f1; font-size:10px; font-weight:600;"
+            " border:none; background:transparent;"
+        )
+        hl.addWidget(lbl)
+        vl.addWidget(hdr)
+        vl.addWidget(widget, stretch=1)
+        return outer
+
     @staticmethod
     def _make_card() -> QWidget:
         w = QWidget()

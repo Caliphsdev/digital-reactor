@@ -71,6 +71,10 @@ def _global_qss() -> str:
     Applied once to QApplication — cascades to all widgets.
     Overrides can still be applied per-widget using setStyleSheet().
     """
+    import os
+    # Build absolute path so the image URL works regardless of launch directory
+    _icons = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
+    _check = os.path.join(_icons, "check_white.svg").replace("\\", "/")
     c = COLORS
     return f"""
     /* ── Global base ──────────────────────────────────────────────────── */
@@ -229,6 +233,74 @@ def _global_qss() -> str:
     QMessageBox {{
         background: {c['card_bg']};
     }}
+    /* Explicitly style dialog buttons — QMessageBox's white background
+       cascades and can override the global QPushButton rule. */
+    QMessageBox QPushButton {{
+        background-color: {c['blue']};
+        color: #ffffff;
+        border: none;
+        border-radius: 4px;
+        padding: 6px 20px;
+        font-size: 10pt;
+        min-width: 70px;
+    }}
+    QMessageBox QPushButton:hover  {{ background-color: #3498db; }}
+    QMessageBox QPushButton:pressed {{ background-color: #1a6da3; }}
+    /* Destructive / default button gets a more prominent colour */
+    QMessageBox QPushButton[text="Yes"],
+    QMessageBox QPushButton[text="OK"] {{
+        background-color: {c['blue']};
+    }}
+    QMessageBox QPushButton[text="Cancel"],
+    QMessageBox QPushButton[text="No"] {{
+        background-color: {c['text_secondary']};
+    }}
+
+    /* ── Calendar widget — always light background for readability ───── */
+    QCalendarWidget {{
+        background-color: #ffffff;
+        color: #2c3e50;
+        border: 1px solid {c['card_border']};
+        border-radius: 6px;
+    }}
+    QCalendarWidget QAbstractItemView {{
+        background-color: #ffffff;
+        color: #2c3e50;
+        selection-background-color: {c['blue']};
+        selection-color: #ffffff;
+        alternate-background-color: #f8f9fa;
+        font-size: 10pt;
+        outline: none;
+    }}
+    QCalendarWidget QAbstractItemView:disabled {{
+        color: #b2bec3;
+    }}
+    QCalendarWidget QWidget#qt_calendar_navigationbar {{
+        background-color: {c['sidebar_bg']};
+        border-radius: 6px 6px 0 0;
+    }}
+    QCalendarWidget QToolButton {{
+        background-color: transparent;
+        color: #ecf0f1;
+        border: none;
+        border-radius: 3px;
+        padding: 4px 8px;
+        font-size: 10pt;
+        font-weight: bold;
+    }}
+    QCalendarWidget QToolButton:hover {{
+        background-color: {c['sidebar_hover']};
+    }}
+    QCalendarWidget QSpinBox {{
+        background-color: {c['sidebar_bg']};
+        color: #ecf0f1;
+        border: none;
+        font-size: 10pt;
+    }}
+    QCalendarWidget QMenu {{
+        background-color: #ffffff;
+        color: #2c3e50;
+    }}
 
     /* ── Tool tip ─────────────────────────────────────────────────────── */
     QToolTip {{
@@ -251,6 +323,7 @@ def _global_qss() -> str:
     QCheckBox::indicator:checked {{
         background: {c['blue']};
         border-color: {c['blue']};
+        image: url({_check});
     }}
     """
 
@@ -275,6 +348,56 @@ def apply_theme(app: QApplication) -> None:
 def header_bar_style() -> str:
     """Dark header bar (54px) used at top of each screen."""
     return f"background-color: {COLORS['sidebar_bg']};"
+
+
+def dark_date_edit_style() -> str:
+    """
+    Style for a QDateEdit sitting in a dark header bar.
+
+    Includes explicit calendar popup resets so that weekday numbers stay
+    readable.  Without these resets, Qt cascades the header's color:#ecf0f1
+    into the calendar popup, making weekday cells invisible (white-on-white).
+    """
+    c = COLORS
+    return f"""
+        QDateEdit {{
+            background: #3d5166; color: #ecf0f1;
+            border: 1px solid #566573; border-radius: 4px;
+            padding: 2px 6px; font-size: 11px;
+        }}
+        /* ── Calendar popup resets ─────────────────────────────────────── */
+        QCalendarWidget {{
+            background-color: #ffffff; color: #2c3e50;
+        }}
+        QCalendarWidget QAbstractItemView {{
+            background-color: #ffffff;
+            color: #2c3e50;
+            selection-background-color: {c['blue']};
+            selection-color: #ffffff;
+            alternate-background-color: #f8f9fa;
+            font-size: 10pt;
+        }}
+        QCalendarWidget QAbstractItemView:disabled {{
+            color: #b2bec3;
+        }}
+        QCalendarWidget QWidget#qt_calendar_navigationbar {{
+            background-color: {c['sidebar_bg']};
+            border-radius: 6px 6px 0 0;
+        }}
+        QCalendarWidget QToolButton {{
+            color: #ecf0f1; background: transparent; border: none;
+            border-radius: 3px; padding: 4px 8px; font-weight: bold;
+        }}
+        QCalendarWidget QToolButton:hover {{
+            background-color: {c['sidebar_hover']};
+        }}
+        QCalendarWidget QSpinBox {{
+            background-color: {c['sidebar_bg']}; color: #ecf0f1; border: none;
+        }}
+        QCalendarWidget QMenu {{
+            background-color: #ffffff; color: #2c3e50;
+        }}
+    """
 
 
 def card_style(border_radius: int = 8) -> str:

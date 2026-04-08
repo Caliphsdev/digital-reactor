@@ -46,8 +46,8 @@ C_GREEN    = "#27ae60"
 C_RED      = "#e74c3c"
 C_BLUE     = "#2980b9"
 
-# Maximum number of auto-backups to keep
-MAX_BACKUPS = 5
+# Maximum total backups to keep (auto + manual combined)
+MAX_BACKUPS = 7
 
 
 def _backup_dir() -> Path:
@@ -79,6 +79,9 @@ class SettingsScreen(QWidget):
         layout.setSpacing(0)
 
         layout.addWidget(self._build_header())
+
+        # ── QSettings must be created BEFORE building tabs that read from it ──
+        self._qsettings = QSettings("TUT", "DigitalReactor")
 
         body = QWidget()
         body.setStyleSheet(f"background-color: {C_BG};")
@@ -114,7 +117,6 @@ class SettingsScreen(QWidget):
         body_layout.addWidget(self._tabs)
         layout.addWidget(body, stretch=1)
 
-        self._qsettings = QSettings("TUT", "DigitalReactor")
         self._load_defaults()
 
         # Run auto-backup silently on screen load if enabled
@@ -414,18 +416,31 @@ class SettingsScreen(QWidget):
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         dest = bdir / f"reactor_backup_{ts}.db"
         shutil.copy2(str(DB_PATH), str(dest))
-        # Prune old backups — keep only the most recent MAX_BACKUPS
+        # Prune oldest backups — keep only the most recent MAX_BACKUPS total
         existing = sorted(bdir.glob("reactor_backup_*.db"))
         while len(existing) > MAX_BACKUPS:
             existing.pop(0).unlink()
+            existing = sorted(bdir.glob("reactor_backup_*.db"))
         return dest
 
     def _auto_backup(self) -> None:
-        """Silent auto-backup — called on screen open when toggle is ON."""
+        """
+        Silent auto-backup — at most once per calendar day.
+
+        Checks whether any backup already exists for today before creating
+        a new one.  This prevents accumulation when the user visits Settings
+        multiple times in the same session.
+        """
         try:
+            bdir = _backup_dir()
+            today = datetime.now().strftime("%Y-%m-%d")
+            if bdir.exists():
+                # Already backed up today — skip silently
+                if any(bdir.glob(f"reactor_backup_{today}_*.db")):
+                    return
             self._do_backup()
         except Exception:
-            pass   # silent — don't alarm the user
+            pass   # silent — never alarm the user for an auto-backup failure
 
     def _on_restore(self) -> None:
         """Restore the selected backup over the current reactor.db."""
