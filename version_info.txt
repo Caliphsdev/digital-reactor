@@ -1,0 +1,38 @@
+# UTF-8
+# Windows VERSIONINFO resource — embedded into DigitalReactor.exe by PyInstaller
+# https://pyinstaller.org/en/stable/spec-files.html#adding-version-resource-files-to-windows-executables
+#
+# filevers / prodvers: (major, minor, patch, build)
+# VS_FF_PRERELEASE flag should be cleared (0x0) for a release build.
+
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0),
+    prodvers=(1, 0, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,       # VOS_NT_WINDOWS32
+    fileType=0x1,     # VFT_APP
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        u'040904B0',  # Language: English (US), Codepage: Unicode
+        [
+          StringStruct(u'CompanyName',      u'Caliphs Zvinowanda'),
+          StringStruct(u'FileDescription',  u'Digital Reactor \u2014 PFAS & CEC Wastewater Research Platform'),
+          StringStruct(u'FileVersion',      u'1.0.0.0'),
+          StringStruct(u'InternalName',     u'DigitalReactor'),
+          StringStruct(u'LegalCopyright',   u'\u00a9 2026 Caliphs Zvinowanda. All rights reserved.'),
+          StringStruct(u'OriginalFilename', u'DigitalReactor.exe'),
+          StringStruct(u'ProductName',      u'Digital Reactor'),
+          StringStruct(u'ProductVersion',   u'1.0.0.0'),
+          StringStruct(u'Comments',         u'Lab-scale activated sludge reactor tracking for PFAS/CEC research. OECD Guideline 303A.'),
+        ]
+      )
+    ]),
+    VarFileInfo([VarStruct(u'Translation', [0x0409, 1200])])
+  ]
+)

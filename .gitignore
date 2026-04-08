@@ -70,7 +70,10 @@ exports/
 *.csv
 
 # ── Packaging / distribution ──────────────────────────────────────────────────
-*.spec
-installer/
+# digital_reactor.spec and installer/digital_reactor.iss ARE tracked (source files).
+# Only ignore generated build outputs:
 dist/
 build/
+installer/Output/
+installer/vc_redist.x64.exe   # 25 MB binary — download separately (see build.bat)
+# digital_reactor.spec, installer/digital_reactor.iss, version_info.txt are tracked
