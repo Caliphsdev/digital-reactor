@@ -1,0 +1,9 @@
+PySide6
+qtawesome
+SQLAlchemy
+matplotlib
+pyqtgraph
+scikit-learn
+pandas
+numpy
+openpyxl
