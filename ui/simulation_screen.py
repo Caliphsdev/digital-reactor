@@ -25,13 +25,18 @@ from PySide6.QtWidgets import (
     QFrame, QSizePolicy, QSplitter, QTableWidget,
     QTableWidgetItem, QHeaderView, QAbstractItemView, QMessageBox,
 )
-from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtCore import Qt, QSize, QTimer, QThread, Signal
 from PySide6.QtGui import QFont, QColor, QBrush
 from PySide6.QtCharts import (
     QChart, QChartView, QBarSeries, QBarSet, QBarCategoryAxis, QValueAxis,
 )
 
 from simulation.generic_model import SimInputs, SimOutputs, run_phase1
+from simulation.data_model import (
+    run_phase2, get_model_status, train_phase2,
+    MAIN_MODEL_THRESHOLD,
+)
+import simulation.data_model as _dm
 from core.database import get_session
 from core.models import SimulationRun
 
@@ -81,6 +86,12 @@ class SimulationScreen(QWidget):
 
     # ── Header ─────────────────────────────────────────────────────────────────
     def _build_header(self) -> QWidget:
+        container = QWidget()
+        vl = QVBoxLayout(container)
+        vl.setContentsMargins(0, 0, 0, 0)
+        vl.setSpacing(0)
+
+        # ── Top bar ────────────────────────────────────────────────────────────
         bar = QWidget()
         bar.setFixedHeight(54)
         bar.setStyleSheet(f"background:{C_HDR};")
@@ -88,15 +99,33 @@ class SimulationScreen(QWidget):
         row.setContentsMargins(18, 0, 18, 0)
         row.setSpacing(12)
 
-        t = QLabel("Simulation  —  Phase 1 Generic Model")
+        self._header_title = QLabel("Simulation  —  Phase 1 Generic Model")
         f = QFont(); f.setPointSize(13); f.setBold(True)
-        t.setFont(f); t.setStyleSheet("color:#ecf0f1;")
-        row.addWidget(t)
-
-        note = QLabel("Textbook estimates only — Phase 2 uses your real data")
-        note.setStyleSheet("color:#7f8c8d; font-size:10px;")
-        row.addWidget(note)
+        self._header_title.setFont(f)
+        self._header_title.setStyleSheet("color:#ecf0f1;")
+        row.addWidget(self._header_title)
         row.addStretch()
+
+        # Model selector
+        model_lbl = QLabel("Model:")
+        model_lbl.setStyleSheet("color:#bdc3c7; font-size:11px;")
+        self._model_selector = QComboBox()
+        self._model_selector.addItems([
+            "Phase 1 – Equations",
+            "Phase 2 – Data-Driven",
+        ])
+        self._model_selector.setFixedHeight(30)
+        self._model_selector.setFixedWidth(195)
+        self._model_selector.setStyleSheet("""
+            QComboBox { border:1px solid #566573; border-radius:4px;
+                padding:4px 8px; font-size:11px;
+                background:#34495e; color:#ecf0f1; }
+            QComboBox::drop-down { border:none; }
+            QComboBox QAbstractItemView { background:#34495e; color:#ecf0f1; }
+        """)
+        self._model_selector.currentIndexChanged.connect(self._on_model_changed)
+        row.addWidget(model_lbl)
+        row.addWidget(self._model_selector)
 
         save_btn = QPushButton("  Save Scenario")
         save_btn.setIcon(qta.icon("fa6s.floppy-disk", color="#fff"))
@@ -112,7 +141,189 @@ class SimulationScreen(QWidget):
         save_btn.clicked.connect(self._save_scenario)
         row.addWidget(save_btn)
 
-        return bar
+        vl.addWidget(bar)
+
+        # ── Phase 2 status card (hidden until Phase 2 selected) ────────────────
+        self._p2_status_card = self._build_p2_status_card()
+        self._p2_status_card.setVisible(False)
+        vl.addWidget(self._p2_status_card)
+
+        return container
+
+    def _build_p2_status_card(self) -> QWidget:
+        """Info card shown below the header when Phase 2 is selected."""
+        card = QWidget()
+        card.setFixedHeight(76)
+        card.setStyleSheet(
+            "QWidget { background:#f0f3f4; border-bottom:1px solid #d5dbdb; }"
+        )
+
+        row = QHBoxLayout(card)
+        row.setContentsMargins(18, 8, 18, 8)
+        row.setSpacing(20)
+
+        # Sample count
+        self._p2_sample_lbl = QLabel("Samples: —")
+        self._p2_sample_lbl.setStyleSheet(
+            "color:#2c3e50; font-size:11px; font-weight:600; border:none; background:transparent;"
+        )
+        row.addWidget(self._p2_sample_lbl)
+
+        # Vertical divider
+        div1 = QFrame()
+        div1.setFrameShape(QFrame.VLine)
+        div1.setStyleSheet("color:#d5dbdb; border:none; background:#d5dbdb;")
+        div1.setFixedWidth(1)
+        row.addWidget(div1)
+
+        # Last trained
+        self._p2_trained_lbl = QLabel("Not trained yet")
+        self._p2_trained_lbl.setStyleSheet(
+            "color:#7f8c8d; font-size:10px; border:none; background:transparent;"
+        )
+        row.addWidget(self._p2_trained_lbl)
+
+        # Vertical divider
+        div2 = QFrame()
+        div2.setFrameShape(QFrame.VLine)
+        div2.setStyleSheet("color:#d5dbdb; border:none; background:#d5dbdb;")
+        div2.setFixedWidth(1)
+        row.addWidget(div2)
+
+        # R² scores
+        self._p2_r2_lbl = QLabel("R²: —")
+        self._p2_r2_lbl.setStyleSheet(
+            "color:#2c3e50; font-size:11px; border:none; background:transparent;"
+        )
+        row.addWidget(self._p2_r2_lbl)
+
+        row.addStretch()
+
+        # Status / warning message
+        self._p2_status_msg = QLabel("")
+        self._p2_status_msg.setWordWrap(True)
+        self._p2_status_msg.setStyleSheet(
+            "color:#e67e22; font-size:10px; font-weight:600; border:none; background:transparent;"
+        )
+        row.addWidget(self._p2_status_msg, stretch=1)
+
+        # Train button
+        self._train_btn = QPushButton("  Train Model")
+        self._train_btn.setIcon(qta.icon("fa6s.brain", color="#fff"))
+        self._train_btn.setIconSize(QSize(12, 12))
+        self._train_btn.setFixedHeight(32)
+        self._train_btn.setFixedWidth(130)
+        self._train_btn.setCursor(Qt.PointingHandCursor)
+        self._train_btn.setStyleSheet("""
+            QPushButton { background:#27ae60; color:#fff; border:none;
+                border-radius:4px; font-size:11px; font-weight:600; padding:0 12px; }
+            QPushButton:hover { background:#2ecc71; }
+            QPushButton:pressed { background:#1e8449; }
+            QPushButton:disabled { background:#aab7b8; color:#ecf0f1; }
+        """)
+        self._train_btn.clicked.connect(self._on_train_clicked)
+        row.addWidget(self._train_btn)
+
+        return card
+
+    def _on_model_changed(self, index: int) -> None:
+        """Switch between Phase 1 and Phase 2 prediction modes."""
+        titles = [
+            "Simulation  —  Phase 1 Generic Model",
+            "Simulation  —  Phase 2 Data-Driven Model",
+        ]
+        self._header_title.setText(titles[index])
+        self._p2_status_card.setVisible(index == 1)
+        if index == 1:
+            self._refresh_p2_status()
+        self._debounce.start()
+
+    def _refresh_p2_status(self) -> None:
+        """Populate the Phase 2 status card from metadata.json."""
+        status = get_model_status()
+        n         = status["n_samples_main"]
+        threshold = MAIN_MODEL_THRESHOLD
+
+        self._p2_sample_lbl.setText(f"Samples: {n} / {threshold} required")
+
+        if status["main_trained"]:
+            dt_raw = status.get("last_trained") or ""
+            dt_str = dt_raw[:16].replace("T", " ") + " UTC" if dt_raw else "unknown"
+            self._p2_trained_lbl.setText(f"Trained: {dt_str}")
+
+            parts = []
+            for key, label in [
+                ("r2_cod", "COD"), ("r2_nh4", "NH₄"),
+                ("r2_tp", "TP"),   ("r2_pfas", "PFAS"),
+            ]:
+                val = status.get(key)
+                if val is not None:
+                    parts.append(f"{label} {val:.2f}")
+            self._p2_r2_lbl.setText("R²  " + "  |  ".join(parts) if parts else "R²: —")
+            self._p2_status_msg.setText("")
+            self._train_btn.setText("  Retrain")
+            self._train_btn.setEnabled(True)
+        else:
+            self._p2_trained_lbl.setText("Not trained yet")
+            self._p2_r2_lbl.setText("R²: —")
+            self._train_btn.setText("  Train Model")
+            if n < threshold:
+                needed = threshold - n
+                self._p2_status_msg.setText(
+                    f"Need {needed} more complete daily readings to enable training."
+                )
+                self._train_btn.setEnabled(False)
+            else:
+                self._p2_status_msg.setText(
+                    f"{n} samples available — ready to train."
+                )
+                self._train_btn.setEnabled(True)
+
+    def _on_train_clicked(self) -> None:
+        """Kick off model training in a background thread."""
+        self._train_btn.setEnabled(False)
+        self._train_btn.setText("  Training…")
+        self._p2_status_msg.setText("Training in progress…")
+
+        class _TrainWorker(QThread):
+            finished = Signal(dict)
+
+            def run(self_inner):
+                try:
+                    with get_session() as session:
+                        result = train_phase2(session)
+                    self_inner.finished.emit(result)
+                except Exception as exc:
+                    self_inner.finished.emit({"status": "error", "message": str(exc)})
+
+        self._train_worker = _TrainWorker()
+        self._train_worker.finished.connect(self._on_train_finished)
+        self._train_worker.start()
+
+    def _on_train_finished(self, result: dict) -> None:
+        """Handle completion of the training worker thread."""
+        if result.get("status") == "ok":
+            # Invalidate caches so run_phase2 picks up the new model files
+            _dm._main_model_cache = None
+            _dm._pfas_model_cache = None
+            self._refresh_p2_status()
+            self._debounce.start()
+            cv = result.get("cv_r2_mean")
+            cv_str = f"{cv:.3f}" if cv is not None else "n/a"
+            QMessageBox.information(
+                self, "Training Complete",
+                f"Phase 2 model trained on {result['n_samples_main']} samples.\n"
+                f"Cross-validated R²: {cv_str}\n\n"
+                f"COD R²: {result.get('r2_cod', 0):.3f}  "
+                f"NH₄ R²: {result.get('r2_nh4', 0):.3f}  "
+                f"TP R²: {result.get('r2_tp', 0):.3f}"
+            )
+        else:
+            self._p2_status_msg.setText(
+                f"Training failed: {result.get('message', 'unknown error')}"
+            )
+            self._train_btn.setEnabled(True)
+            self._refresh_p2_status()
 
     # ── Inputs panel (left) ────────────────────────────────────────────────────
     def _build_inputs_panel(self) -> QWidget:
@@ -420,9 +631,13 @@ class SimulationScreen(QWidget):
         )
 
     def _recalculate(self) -> None:
-        """Run the Phase 1 model and refresh all result widgets."""
-        inputs  = self._get_inputs()
-        outputs = run_phase1(inputs)
+        """Run the active model and refresh all result widgets."""
+        inputs = self._get_inputs()
+        if (self._model_selector.currentIndex() == 1
+                and get_model_status()["main_trained"]):
+            outputs = run_phase2(inputs)
+        else:
+            outputs = run_phase1(inputs)
         self._update_results(inputs, outputs)
 
     def _update_results(self, inp: SimInputs, out: SimOutputs) -> None:
@@ -478,12 +693,15 @@ class SimulationScreen(QWidget):
     def _save_scenario(self) -> None:
         """Save the current inputs and outputs to the simulation_runs table."""
         inp = self._get_inputs()
-        out = run_phase1(inp)
+        is_p2 = (self._model_selector.currentIndex() == 1
+                 and get_model_status()["main_trained"])
+        out = run_phase2(inp) if is_p2 else run_phase1(inp)
+        model_type_str = "data_driven" if is_p2 else "generic"
         try:
             with get_session() as session:
                 run = SimulationRun(
                     run_date          = datetime.utcnow(),
-                    model_type        = "generic",
+                    model_type        = model_type_str,
                     flow_rate_mlh     = inp.flow_rate_mlh,
                     ras_ratio         = inp.ras_ratio,
                     a_recycle         = inp.a_recycle,
@@ -516,6 +734,8 @@ class SimulationScreen(QWidget):
     # ── Lifecycle ──────────────────────────────────────────────────────────────
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        if self._model_selector.currentIndex() == 1:
+            self._refresh_p2_status()
 
     # ── Style helpers ──────────────────────────────────────────────────────────
     def _panel_card(self, title: str, widget: QWidget) -> QWidget:

@@ -25,7 +25,7 @@ Built for PhD research at the **Department of Environmental Management**, as a d
 ## Reactor Configuration
 
 | Property | Value |
-|---|---|
+| --- | --- |
 | Reactor type | Lab-scale Activated Sludge |
 | Standard | OECD Guideline 303A |
 | Total volume | 12 L (3 zones × 4 L) |
@@ -40,7 +40,7 @@ Built for PhD research at the **Department of Environmental Management**, as a d
 ## Tech Stack
 
 | Layer | Technology |
-|---|---|
+| --- | --- |
 | UI Framework | [PySide6](https://doc.qt.io/qtforpython/) (Qt 6 for Python) |
 | Database | SQLite + [SQLAlchemy](https://www.sqlalchemy.org/) ORM |
 | Charts | [PyQtGraph](https://www.pyqtgraph.org/) + Matplotlib |
@@ -81,13 +81,13 @@ pip install -r requirements.txt
 python main.py
 ```
 
-On first run, `reactor.db` is created automatically in the project folder with all required tables.
+On first run, `reactor.db` is created automatically in the user data folder (`%APPDATA%\DigitalReactor\`) with all required tables. If an existing `reactor.db` is found next to the executable (legacy location), it is migrated to the new location automatically.
 
 ---
 
 ## Project Structure
 
-```
+```text
 digital-reactor/
 │
 ├── main.py                    # Application entry point
@@ -97,11 +97,12 @@ digital-reactor/
 │   ├── models.py              # SQLAlchemy ORM models (8 tables)
 │   ├── database.py            # Engine, session manager, init_db()
 │   ├── calculations.py        # Pure scientific calculation functions
-│   └── migrations.py         # Incremental schema migration runner
+│   ├── migrations.py          # Incremental schema migration runner
+│   └── paths.py               # User-data paths (AppData) — single source of truth
 │
 ├── simulation/                # Scientific models
 │   ├── generic_model.py       # Phase 1: textbook equations (OECD 303A)
-│   └── data_model.py          # Phase 2: scikit-learn ML (placeholder)
+│   └── data_model.py          # Phase 2: Random Forest ML (scikit-learn)
 │
 ├── ui/                        # PySide6 screens and widgets
 │   ├── main_window.py         # Main window + collapsible sidebar
@@ -130,10 +131,27 @@ digital-reactor/
 
 ## Database
 
-The app uses a local SQLite database (`reactor.db`) with 8 tables:
+The app uses a SQLite database (`reactor.db`) stored in the user data folder:
+
+```text
+Windows:  C:\Users\<name>\AppData\Roaming\DigitalReactor\reactor.db
+```
+
+Trained Phase 2 ML models are stored alongside it:
+
+```text
+AppData\DigitalReactor\models\
+├── phase2_main.joblib   (COD / NH₄ / TP model)
+├── phase2_pfas.joblib   (PFAS model)
+└── metadata.json        (training stats, R² scores)
+```
+
+This location is completely separate from the installation folder — updating or reinstalling the application **never touches the researcher's data**.
+
+### Tables (8)
 
 | Table | Purpose |
-|---|---|
+| --- | --- |
 | `experiments` | Experimental runs (startup to shutdown) |
 | `daily_readings` | Zone water quality measurements (18 parameters) |
 | `flow_readings` | Flow rates for mass balance |
@@ -143,7 +161,7 @@ The app uses a local SQLite database (`reactor.db`) with 8 tables:
 | `daspoort_monitoring` | Quarterly Daspoort WWTP field data |
 | `sludge_characterization` | Weekly SVI settling test results |
 
-> **Note:** `reactor.db` is excluded from version control (`.gitignore`) as it contains research data. Back it up regularly using **Settings → Data Management → Backup Now**.
+> **Note:** `reactor.db` and `models/*.joblib` are excluded from version control (`.gitignore`) as they contain research data and machine-specific trained models. Back up the database regularly using **Settings → Data Management → Backup Now**.
 
 ### Schema Migrations
 
@@ -155,7 +173,7 @@ New app versions may add database columns. The migration system (`core/migration
 
 All equations are documented in `Docs/03_EQUATIONS.md` and in the built-in Manual (sidebar → **Manual**). Key equations:
 
-```
+```text
 Mass load:     mass (µg/day) = C (µg/L) × Q (mL/h) × 24 / 1000
 Effluent flow: Q_eff = Q_in − Q_psludge − Q_WAS
 Removal:       % = (C_inf − C_eff) / C_inf × 100
@@ -189,6 +207,7 @@ Before installing a new app version:
 ## Version
 
 **v1.0** — Initial release
+
 - Core data entry and tracking screens
 - Phase 1 generic simulation model
 - Built-in manual (13 topics)

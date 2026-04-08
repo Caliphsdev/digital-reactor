@@ -119,7 +119,9 @@ activated sludge reactor.</p>
 
   <li><b>Step 5 — Explore Predictions</b><br>
       Go to <b>Simulation</b>. Adjust the sliders to explore what-if scenarios.
-      Phase 1 gives immediate textbook-based predictions.</li>
+      The <b>Model</b> dropdown in the top bar lets you switch between
+      Phase 1 (textbook equations, always available) and Phase 2
+      (your own data — requires ≥ 50 daily readings and a manual training step).</li>
 </ul>
 
 <div class="tip"><b>Tip:</b> The <b>Home</b> screen shows a live animated diagram
@@ -557,57 +559,124 @@ mass balance closure.</div>
 operating conditions and instantly see predicted removal efficiencies,
 without touching the real reactor or waiting for lab results.</p>
 
-<h3>Phase 1 — Generic Model (active now)</h3>
-<p>Uses textbook equations calibrated to the reactor design (OECD 303A).
-Predictions are directional estimates, not exact measurements.</p>
+<h3>Choosing a Model</h3>
+<p>The <b>Model</b> dropdown in the top-right of the header lets you switch
+between two prediction engines:</p>
+<table>
+  <tr><th>Option</th><th>What it uses</th><th>When to use it</th></tr>
+  <tr>
+    <td><b>Phase 1 – Equations</b></td>
+    <td>Textbook formulas (OECD 303A)</td>
+    <td>Always available — use from day one</td>
+  </tr>
+  <tr>
+    <td><b>Phase 2 – Data-Driven</b></td>
+    <td>Random Forest trained on your lab data</td>
+    <td>After ≥ 50 complete daily readings and training the model</td>
+  </tr>
+</table>
+<p>All sliders and influent spinboxes are the same for both models. Only the
+prediction engine changes when you switch.</p>
+
+<hr>
+<h3>Phase 1 — Generic Model</h3>
+<p>Uses textbook equations calibrated to the reactor design. Predictions are
+directional estimates — useful from day one, but not calibrated to your
+specific reactor or wastewater.</p>
 
 <h4>What you can adjust</h4>
 <table>
   <tr><th>Parameter</th><th>Range</th><th>Effect on predictions</th></tr>
   <tr><td>Flow rate</td><td>200–450 mL/h</td><td>Changes HRT → affects COD and NH₄ removal</td></tr>
-  <tr><td>DO</td><td>0–5 mg/L</td><td>Directly controls nitrification rate</td></tr>
-  <tr><td>SRT</td><td>5–60 days</td><td>Low SRT → nitrifier washout warning</td></tr>
+  <tr><td>DO (aerobic)</td><td>0–5 mg/L</td><td>Directly controls nitrification rate</td></tr>
+  <tr><td>SRT (Sludge age)</td><td>5–60 days</td><td>Low SRT → nitrifier washout warning</td></tr>
   <tr><td>RAS ratio</td><td>0.5–3.0</td><td>Affects clarifier performance</td></tr>
   <tr><td>a-recycle ratio</td><td>1–8</td><td>Controls denitrification and bio-P</td></tr>
   <tr><td>Temperature</td><td>15–35°C</td><td>All biological rates use θ^(T−20)</td></tr>
   <tr><td>pH</td><td>5–10</td><td>Warns if outside 6.5–8.0</td></tr>
-  <tr><td>MLSS</td><td>500–8000 mg/L</td><td>Controls PFAS adsorption via Kd model</td></tr>
+  <tr><td>MLSS</td><td>500–100 000 mg/L</td><td>Controls PFAS adsorption via Kd model</td></tr>
 </table>
 
 <h4>Influent concentrations</h4>
 <p>Set the incoming concentrations of COD, NH₄, Total-P, and PFAS to match
 your actual feed composition.</p>
 
-<h3>Temperature Effect</h3>
-<p>All biological removal rates are corrected for temperature using:</p>
+<h3>Temperature Effect (Phase 1)</h3>
+<p>All biological rates are corrected for temperature using:</p>
 <div class="eq">Rate_T = Rate_20°C × θ^(T − 20)   where θ = 1.06</div>
 <p>A 5°C drop from 20°C to 15°C reduces all biological rates by about 25%.
 This is why winter performance is typically worse.</p>
 
 <h3>Warning Flags</h3>
-<p>Yellow warning messages appear when parameters are outside the optimal range.
+<p>Yellow warning boxes appear when parameters are outside the optimal range.
 Key warnings to watch for:</p>
 <ul>
   <li><b>Nitrifier washout risk</b> — SRT too low for the current temperature</li>
-  <li><b>DO out of range</b> — too low impairs nitrification; too high wastes energy</li>
+  <li><b>DO out of range</b> — below 1 mg/L impairs nitrification</li>
   <li><b>Temperature too low/high</b> — outside 18–28°C optimum</li>
   <li><b>Flow too high</b> — reduces HRT, reduces treatment efficiency</li>
+  <li><b>Phase 2 fallback</b> — if Phase 2 is selected but a model is not trained
+      yet, this warning tells you which targets are still using Phase 1 equations</li>
 </ul>
 
+<hr>
+<h3>Phase 2 — Data-Driven Model</h3>
+<p>Phase 2 trains a <b>Random Forest</b> on your own lab measurements and uses it
+to predict removal efficiencies calibrated to <i>your specific reactor</i>.</p>
+
+<h4>Step 1 — Collect data</h4>
+<p>Phase 2 requires <b>≥ 50 complete daily readings</b> — days where you entered
+aerobic zone readings, effluent zone readings, and flow readings on the same date.
+The Phase 2 status card (visible when Phase 2 is selected) shows your current
+count vs the 50-sample threshold.</p>
+<p>A separate <b>PFAS model</b> activates once you have ≥ 15 paired CEC readings
+(SP1 + SP4 on the same date for the same CEC). Until then, PFAS predictions fall
+back to Phase 1.</p>
+
+<h4>Step 2 — Train the model</h4>
+<ol style="margin:4px 0 10px 18px; padding:0;">
+  <li>Select <b>Phase 2 – Data-Driven</b> from the Model dropdown.</li>
+  <li>The status card appears below the header. When your sample count
+      reaches 50, the <b>Train Model</b> button turns green and becomes clickable.</li>
+  <li>Click <b>Train Model</b>. Training runs in the background (a few seconds).
+      A summary popup confirms completion.</li>
+  <li>After training, the status card shows R² scores and the date trained.
+      The sliders immediately start using Phase 2 predictions.</li>
+</ol>
+
+<h4>Phase 2 status card</h4>
+<table>
+  <tr><th>Item</th><th>What it means</th></tr>
+  <tr><td>Samples: X / 50</td><td>How many complete training rows are available</td></tr>
+  <tr><td>Trained: date UTC</td><td>When the model was last trained</td></tr>
+  <tr><td>R² COD / NH₄ / TP / PFAS</td><td>In-sample accuracy scores (see below)</td></tr>
+  <tr><td>Orange status message</td><td>Why the Train button is disabled (if it is)</td></tr>
+  <tr><td>Train Model / Retrain</td><td>Trigger training (green = ready, grey = not enough data)</td></tr>
+</table>
+
+<h4>Understanding R² scores</h4>
+<p>After training, the popup shows a <b>cross-validated R²</b> — the scientifically
+meaningful accuracy score. The status card shows per-target in-sample R² values.</p>
+<table>
+  <tr><th>Cross-validated R²</th><th>What it means</th></tr>
+  <tr><td>&gt; 0.80</td><td>Strong model — captures your reactor's behaviour well</td></tr>
+  <tr><td>0.60 – 0.80</td><td>Acceptable — useful with some uncertainty</td></tr>
+  <tr><td>&lt; 0.60</td><td>Weak — may need more data or check for data entry errors</td></tr>
+</table>
+<div class="note"><b>Note:</b> The per-target R² values shown in the status card
+(e.g. COD 0.96) are in-sample scores and will always look high. The cross-validated
+R² in the training popup is the honest measure — use that to judge model quality.</div>
+
+<h4>When to retrain</h4>
+<p>Click <b>Retrain</b> after collecting several more weeks of data to incorporate
+new measurements. There is no harm in retraining frequently — the model always
+trains on the full dataset.</p>
+
+<hr>
 <h3>Saving a Scenario</h3>
-<p>Click <b>Save Scenario</b> to store the inputs and predictions in the database.
-Saved scenarios appear in the Comparison dashboard for review.</p>
-
-<h3>Phase 2 — Data-Driven Model (future)</h3>
-<p>After approximately 6–12 months of real experimental data (≥50 daily
-readings), Phase 2 will activate. It trains a Random Forest model on your
-actual lab data instead of textbook equations. Phase 2 predictions will be
-calibrated to <i>your specific reactor and wastewater</i>, giving much more
-accurate results than Phase 1.</p>
-
-<div class="note"><b>Phase 2 status:</b> Not yet available. Continue collecting
-daily data — Phase 2 will become available automatically once sufficient
-data has been logged.</div>
+<p>Click <b>Save Scenario</b> to store the current inputs and predictions in the
+database. The record is tagged <code>generic</code> (Phase 1) or
+<code>data_driven</code> (Phase 2) so the Comparison dashboard can distinguish them.</p>
 """)),
 
     # ── 9 ─────────────────────────────────────────────────────────────────────
@@ -856,6 +925,43 @@ the expected ranges for this reactor system.</p>
   <li>Check that your influent concentrations in the slider panel match your
       actual measured values.</li>
   <li>Temperature has a large effect — verify the temperature setting is correct.</li>
+</ul>
+
+<h3>Phase 2 "Train Model" button is greyed out</h3>
+<ul>
+  <li>You need <b>≥ 50 complete daily readings</b>. A complete row means aerobic zone,
+      effluent zone, and flow readings all saved on the same date.</li>
+  <li>The status card shows your current count (e.g. "Samples: 23 / 50 required").
+      Keep entering daily data.</li>
+  <li>Rows where Q_WAS = 0 are excluded (SRT cannot be computed). Enter a non-zero
+      waste sludge flow in the Daily Log → Flow Readings section.</li>
+</ul>
+
+<h3>Phase 2 training failed</h3>
+<ul>
+  <li>An error message will appear in the status card. The most common cause is a
+      data quality issue — values that are identical across all rows (no variation)
+      prevent the model from learning.</li>
+  <li>Check that your aerobic and effluent zone readings are different across
+      different days (i.e. the reactor conditions actually varied over time).</li>
+  <li>Try again after entering more data from different operating conditions.</li>
+</ul>
+
+<h3>Phase 2 cross-validated R² is below 0.60</h3>
+<ul>
+  <li>This means the model is not reliably predicting from the available data.
+      Common causes: too little data (close to the 50-sample minimum), inconsistent
+      measurements, or operating conditions that barely changed across experiments.</li>
+  <li>Continue collecting data and retrain when you have 100+ samples.</li>
+  <li>Meanwhile, use Phase 1 — it is still scientifically valid.</li>
+</ul>
+
+<h3>Phase 2 selected but predictions look the same as Phase 1</h3>
+<ul>
+  <li>If the model is not trained yet, Phase 2 silently falls back to Phase 1.
+      A yellow warning in the results area confirms this. Train the model first.</li>
+  <li>If the PFAS model is not yet trained (fewer than 15 CEC readings), PFAS
+      predictions always fall back to Phase 1 even when the main model is active.</li>
 </ul>
 
 <h3>Process Metrics card shows "—" for SRT</h3>
