@@ -386,14 +386,14 @@ class DashboardScreen(QWidget):
                 .all()
             )
 
-            # Actual removal: (anaerobic zone value − effluent zone value) / anaerobic * 100
+            # Actual removal: (primary_settling zone value − effluent zone value) / primary_settling * 100
             actual_rows = []
             if actual_col_name:
                 col_attr = getattr(DailyReading, actual_col_name)
                 inf_data = {
                     r.reading_date: getattr(r, actual_col_name)
                     for r in s.query(DailyReading)
-                    .filter(DailyReading.zone == "anaerobic")
+                    .filter(DailyReading.zone.in_(["primary_settling", "anaerobic"]))
                     .filter(col_attr.isnot(None))
                     .all()
                 }
@@ -581,7 +581,7 @@ class DashboardScreen(QWidget):
         row.addWidget(lbl2)
         self._pt_zone_combo = QComboBox()
         self._pt_zone_combo.addItems([
-            "All zones", "anaerobic", "anoxic", "aerobic", "effluent",
+            "All zones", "primary_settling", "aeration", "clarifier", "effluent",
         ])
         self._pt_zone_combo.setFixedWidth(140)
         self._pt_zone_combo.setStyleSheet(self._combo_style())
@@ -633,7 +633,7 @@ class DashboardScreen(QWidget):
         for d, zone, val in rows:
             by_zone[zone].append((d, val or 0.0))
 
-        zone_order = ["anaerobic", "anoxic", "aerobic", "effluent"]
+        zone_order = ["primary_settling", "aeration", "clarifier", "effluent"]
         ordered_zones = [z for z in zone_order if z in by_zone] + \
                         [z for z in by_zone if z not in zone_order]
 

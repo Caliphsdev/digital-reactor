@@ -1,0 +1,198 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="600" viewBox="0 0 1000 600" role="img" aria-labelledby="title desc">
+  <title id="title">Digital Reactor SCADA Overview</title>
+  <desc id="desc">Industry-styled process overview with primary settling tank, aeration tank, clarifier, instrumentation, and storage.</desc>
+
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#edf1f4"/>
+      <stop offset="100%" stop-color="#dde5ec"/>
+    </linearGradient>
+    <linearGradient id="pipeGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#8fa4b7"/>
+      <stop offset="100%" stop-color="#2c3e50"/>
+    </linearGradient>
+    <linearGradient id="pstGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#a57b66"/>
+      <stop offset="100%" stop-color="#65453b"/>
+    </linearGradient>
+    <radialGradient id="aerGrad" cx="35%" cy="25%" r="90%">
+      <stop offset="0%" stop-color="#2ebc6a"/>
+      <stop offset="55%" stop-color="#228e51"/>
+      <stop offset="100%" stop-color="#16643a"/>
+    </radialGradient>
+    <linearGradient id="claGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#b5c1c8"/>
+      <stop offset="100%" stop-color="#7e8f9a"/>
+    </linearGradient>
+    <linearGradient id="jugBody" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f2f8fc"/>
+      <stop offset="100%" stop-color="#dbe8f1"/>
+    </linearGradient>
+    <linearGradient id="jugInfluent" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#b6daf3"/>
+      <stop offset="100%" stop-color="#89b9d9"/>
+    </linearGradient>
+    <linearGradient id="jugEffluent" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#b2e0c4"/>
+      <stop offset="100%" stop-color="#87c6a1"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#c9d4df" stroke-width="1" opacity="0.45"/>
+    </pattern>
+    <filter id="softShadow" x="-25%" y="-25%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="2" flood-opacity="0.22" flood-color="#000000"/>
+    </filter>
+
+    <!-- Arrowhead for main forward flow -->
+    <marker id="arrowFlow" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M 0 1 L 7 4 L 0 7 Z" fill="#2c3e50" opacity="0.75"/>
+    </marker>
+    <!-- Arrowhead for RAS return line -->
+    <marker id="arrowRAS" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M 0 1 L 7 4 L 0 7 Z" fill="#cf4438"/>
+    </marker>
+    <!-- Arrowhead for WAS line -->
+    <marker id="arrowWAS" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M 0 1 L 7 4 L 0 7 Z" fill="#b73a31"/>
+    </marker>
+    <!-- Arrowhead for storage drop lines -->
+    <marker id="arrowPipe" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M 0 1 L 7 4 L 0 7 Z" fill="#34495e" opacity="0.80"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1000" height="600" fill="url(#bgGrad)"/>
+  <rect x="0" y="0" width="1000" height="600" fill="url(#grid)"/>
+
+  <!-- ── Main process rail (forward flow: left → right) ── -->
+  <!-- Clarifier is now x=751, width=58, right edge=809 -->
+  <g id="process-rail" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M 40 277 L 215 277" stroke="url(#pipeGrad)" stroke-width="7"/>
+    <path d="M 365 277 L 435 277" stroke="url(#pipeGrad)" stroke-width="7"/>
+    <path d="M 645 277 L 751 277" stroke="url(#pipeGrad)" stroke-width="7"/>
+    <path d="M 809 277 L 960 277" stroke="url(#pipeGrad)" stroke-width="7"/>
+    <path d="M 40 275 L 215 275" stroke="#a2b5c7" stroke-width="1.6"/>
+    <path d="M 365 275 L 435 275" stroke="#a2b5c7" stroke-width="1.6"/>
+    <path d="M 645 275 L 751 275" stroke="#a2b5c7" stroke-width="1.6"/>
+    <path d="M 809 275 L 960 275" stroke="#a2b5c7" stroke-width="1.6"/>
+    <!-- Flow direction arrows -->
+    <path d="M 100 276 L 200 276" stroke="none" marker-end="url(#arrowFlow)"/>
+    <path d="M 375 276 L 425 276" stroke="none" marker-end="url(#arrowFlow)"/>
+    <path d="M 665 276 L 740 276" stroke="none" marker-end="url(#arrowFlow)"/>
+    <path d="M 825 276 L 945 276" stroke="none" marker-end="url(#arrowFlow)"/>
+  </g>
+
+  <!-- ── RAS return line (clarifier bottom → aeration tank inlet) ── -->
+  <g id="ras-line" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 780 438 L 780 476 Q 780 488 768 488 L 448 488 Q 436 488 436 476 L 436 276"
+          stroke="#cf4438" stroke-width="3.2" marker-end="url(#arrowRAS)"/>
+    <!-- Mid-route direction arrow -->
+    <path d="M 650 488 L 510 488" stroke="none" marker-end="url(#arrowRAS)"/>
+  </g>
+
+  <!-- ── WAS waste line (clarifier → down) ── -->
+  <g id="was-line" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 780 438 L 780 556" stroke="#b73a31" stroke-width="2.8" marker-end="url(#arrowWAS)"/>
+  </g>
+
+  <!-- ── Storage tanks ── -->
+  <g id="storage" filter="url(#softShadow)">
+
+    <!-- INFLUENT STORAGE — orthogonal drop from pipe start -->
+    <g id="influent-storage">
+      <rect x="60" y="440" width="120" height="130" rx="6" fill="url(#jugBody)" stroke="#70808b" stroke-width="1.7"/>
+      <rect x="62" y="484" width="116" height="84" rx="5" fill="url(#jugInfluent)" opacity="0.88"/>
+      <text x="120" y="512" font-size="15" font-weight="700" text-anchor="middle" fill="#203040">INFLUENT</text>
+      <text x="120" y="534" font-size="15" font-weight="700" text-anchor="middle" fill="#203040">STORAGE</text>
+      <path d="M 40 276 L 40 396 L 120 396 L 120 440"
+            stroke="#34495e" stroke-width="3" fill="none" stroke-linecap="round"
+            marker-end="url(#arrowPipe)"/>
+      <circle cx="40" cy="396" r="3.5" fill="#34495e" opacity="0.7"/>
+      <circle cx="120" cy="396" r="3.5" fill="#34495e" opacity="0.7"/>
+    </g>
+
+    <!-- EFFLUENT STORAGE — orthogonal drop from pipe end -->
+    <g id="effluent-storage">
+      <rect x="830" y="440" width="120" height="130" rx="6" fill="url(#jugBody)" stroke="#70808b" stroke-width="1.7"/>
+      <rect x="832" y="484" width="116" height="84" rx="5" fill="url(#jugEffluent)" opacity="0.88"/>
+      <text x="890" y="512" font-size="15" font-weight="700" text-anchor="middle" fill="#203040">EFFLUENT</text>
+      <text x="890" y="534" font-size="15" font-weight="700" text-anchor="middle" fill="#203040">STORAGE</text>
+      <path d="M 960 276 L 960 396 L 890 396 L 890 440"
+            stroke="#34495e" stroke-width="3" fill="none" stroke-linecap="round"
+            marker-end="url(#arrowPipe)"/>
+      <circle cx="960" cy="396" r="3.5" fill="#34495e" opacity="0.7"/>
+      <circle cx="890" cy="396" r="3.5" fill="#34495e" opacity="0.7"/>
+    </g>
+  </g>
+
+  <!-- ── Vessels ── -->
+  <g id="vessels" filter="url(#softShadow)">
+
+    <g id="primary-settling">
+      <polygon points="215,150 365,150 323,440 257,440" fill="url(#pstGrad)" stroke="#5b3c33" stroke-width="2"/>
+      <polygon points="215,150 365,150 345,285 235,285" fill="#b68f7c" opacity="0.35"/>
+      <text x="290" y="218" font-size="19" font-weight="700" text-anchor="middle" fill="#f4f7fb">PRIMARY</text>
+      <text x="290" y="244" font-size="19" font-weight="700" text-anchor="middle" fill="#f4f7fb">SETTLING</text>
+    </g>
+
+    <g id="aeration-tank">
+      <rect x="435" y="150" width="210" height="252" rx="12" fill="url(#aerGrad)" stroke="#155d38" stroke-width="2"/>
+      <ellipse cx="540" cy="192" rx="58" ry="10" fill="#c8f1de" opacity="0.22"/>
+      <text x="540" y="248" font-size="30" font-weight="700" text-anchor="middle" fill="#f8fcff">AERATION</text>
+      <text x="540" y="284" font-size="30" font-weight="700" text-anchor="middle" fill="#f8fcff">TANK</text>
+    </g>
+
+    <!-- Clarifier widened: x=751, width=58, center=780 -->
+    <g id="clarifier">
+      <rect x="751" y="96" width="58" height="342" rx="6" fill="url(#claGrad)" stroke="#5f6f79" stroke-width="2"/>
+      <rect x="751" y="220" width="58" height="105" fill="#95aab6" opacity="0.70"/>
+      <!-- Single-line label now fits the wider vessel -->
+      <text x="780" y="168" font-size="10" font-weight="700" text-anchor="middle" fill="#f2f6fa">CLARIFIER</text>
+    </g>
+  </g>
+
+  <!-- ── Sampling points ── -->
+  <g id="sampling-points" fill="#ffffff" stroke="#d54a3d" stroke-width="2.2">
+    <circle cx="127" cy="276" r="11"/>
+    <circle cx="400" cy="276" r="11"/>
+    <circle cx="700" cy="276" r="11"/>
+    <circle cx="875" cy="276" r="11"/>
+  </g>
+  <g id="sampling-labels" fill="#d54a3d" font-size="16" font-weight="700" text-anchor="middle">
+    <text x="127" y="262">SP1</text>
+    <text x="400" y="262">SP2</text>
+    <text x="700" y="262">SP3</text>
+    <text x="875" y="262">SP4</text>
+  </g>
+
+  <!-- ── Instrument panels ── -->
+  <g id="instruments" filter="url(#softShadow)">
+
+    <!-- DO Meter — no leader line (removed; kept only the panel itself) -->
+    <g id="do-meter">
+      <rect x="20" y="50" width="75" height="156" rx="4" fill="#152433" stroke="#4b6784" stroke-width="1.4"/>
+      <rect x="24" y="55" width="67" height="62" rx="3" fill="#0d261c"/>
+      <text x="57" y="86" font-size="30" text-anchor="middle" font-weight="700" fill="#39ff14">-</text>
+      <text x="57" y="104" font-size="16" text-anchor="middle" font-weight="700" fill="#39ff14">mg/L</text>
+      <text x="57" y="138" font-size="11" text-anchor="middle" font-weight="700" fill="#b2c1cd">DO</text>
+      <text x="57" y="155" font-size="11" text-anchor="middle" font-weight="700" fill="#b2c1cd">METER</text>
+    </g>
+
+    <!-- RAS Controller — panel shifted 8px left, inner text at smaller size to avoid clipping -->
+    <g id="return-pump-controller">
+      <rect x="897" y="50" width="88" height="156" rx="4" fill="#152433" stroke="#4b6784" stroke-width="1.4"/>
+      <rect x="900" y="54" width="82" height="42" rx="3" fill="#14365a"/>
+      <text x="941" y="71" font-size="9" text-anchor="middle" font-weight="700" fill="#b2c1cd">SEDIMENT</text>
+      <text x="941" y="84" font-size="9" text-anchor="middle" font-weight="700" fill="#b2c1cd">RETURN</text>
+      <!-- RAS value — overwritten at runtime by Python, placeholder only -->
+      <text x="941" y="118" font-size="16" text-anchor="middle" font-weight="700" fill="#e8f4f8">RAS 1.0:1</text>
+      <circle cx="941" cy="160" r="8" fill="#2ecc71" stroke="#14683a" stroke-width="1"/>
+      <text x="941" y="188" font-size="11" text-anchor="middle" font-weight="700" fill="#9db1bf">RUNNING</text>
+    </g>
+  </g>
+
+  <!-- NOTE: RAS and WAS text labels are drawn by Python (_draw_loop_labels / _draw_was_label).
+       No static labels here to avoid double-rendering. -->
+
+</svg>

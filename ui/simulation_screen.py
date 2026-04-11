@@ -6,7 +6,7 @@ Layout:
     ├─── Left panel: Sliders + inputs ─────┬─── Right panel: Results ─┤
     │  Operating parameters (sliders)      │  Removal % gauges        │
     │    Flow rate, DO, SRT, RAS,          │  Effluent concentration  │
-    │    a-recycle, Temp, pH               │  table                   │
+    │    Temp, pH                          │  table                   │
     │  Influent concentrations             │  Warning flags           │
     │    COD, NH4, TP, PFAS                │  Bar chart               │
     │  PFAS type selector                  │                          │
@@ -45,10 +45,9 @@ C_HDR = "#2c3e50"
 # Recommended operating ranges for slider warning colours
 PARAM_RANGES = {
     "flow_rate": (200, 450),
-    "do":        (1.0, 2.0),
+    "do":        (1.0, 4.0),
     "srt":       (20, 40),
     "ras":       (0.5, 2.0),
-    "a_recycle": (2.0, 6.0),
     "temp":      (18, 28),
     "ph":        (6.5, 8.0),
 }
@@ -344,14 +343,13 @@ class SimulationScreen(QWidget):
 
         slider_defs = [
             # (key, label, unit, min×10, max×10, default×10, decimals, scale)
-            ("flow_rate", "Influent flow",   "mL/h",  1000, 5000, 3200, 0, 0.1),
-            ("do",        "DO (aerobic)",    "mg/L",     0,   50,   15, 1, 0.1),
-            ("srt",       "Sludge age",      "days",     5,   60,   30, 0, 1.0),
-            ("ras",       "RAS ratio",       "",         1,   40,   10, 1, 0.1),
-            ("a_recycle", "a-recycle ratio", "",         5,   80,   40, 1, 0.1),
-            ("temp",      "Temperature",     "°C",     150,  350,  220, 1, 0.1),
-            ("ph",        "pH",              "",        60,   90,   75, 1, 0.1),
-            ("mlss",      "MLSS",            "mg/L",  1000,100000,35000,0, 1.0),
+            ("flow_rate", "Influent flow",      "mL/h",  1000, 5000, 3200, 0, 0.1),
+            ("do",        "DO (aeration tank)", "mg/L",     0,   50,   15, 1, 0.1),
+            ("srt",       "Sludge age",         "days",     5,   60,   30, 0, 1.0),
+            ("ras",       "RAS ratio",          "",         1,   40,   10, 1, 0.1),
+            ("temp",      "Temperature",        "°C",     150,  350,  220, 1, 0.1),
+            ("ph",        "pH",                 "",        60,   90,   75, 1, 0.1),
+            ("mlss",      "MLSS",               "mg/L",  1000,100000,35000,0, 1.0),
         ]
 
         for key, label, unit, mn, mx, default, dec, scale in slider_defs:
@@ -619,7 +617,6 @@ class SimulationScreen(QWidget):
             do_mgl        = s["do"].value()         * 0.1,
             srt_days      = s["srt"].value()        * 1.0,
             ras_ratio     = s["ras"].value()        * 0.1,
-            a_recycle     = s["a_recycle"].value()  * 0.1,
             temp_c        = s["temp"].value()       * 0.1,
             ph            = s["ph"].value()         * 0.1,
             mlss_mgl      = s["mlss"].value()       * 1.0,
@@ -704,7 +701,6 @@ class SimulationScreen(QWidget):
                     model_type        = model_type_str,
                     flow_rate_mlh     = inp.flow_rate_mlh,
                     ras_ratio         = inp.ras_ratio,
-                    a_recycle         = inp.a_recycle,
                     do_mgl            = inp.do_mgl,
                     srt_days          = inp.srt_days,
                     temp_c            = inp.temp_c,

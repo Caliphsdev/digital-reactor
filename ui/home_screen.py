@@ -187,9 +187,9 @@ class HomeScreen(QWidget):
                     .filter_by(experiment_id=active.id, reading_date=today)
                     .first()
                 )
-                aerobic_r = (
+                aeration_r = (
                     session.query(DailyReading)
-                    .filter_by(experiment_id=active.id, reading_date=today, zone="aerobic")
+                    .filter_by(experiment_id=active.id, reading_date=today, zone="aeration")
                     .first()
                 )
 
@@ -199,22 +199,21 @@ class HomeScreen(QWidget):
 
             hrt_h  = calc_hrt(flow.q_in_mlh or 0.0)
             srt_d  = calc_actual_srt(
-                aerobic_r.mlss_mgl if aerobic_r else 3000.0,
+                aeration_r.mlss_mgl if aeration_r else 3000.0,
                 flow.q_was_mlh or 0.0
             )
             fm = 0.0
-            if aerobic_r and aerobic_r.mlss_mgl:
-                # Use influent COD from aerobic zone's COD reading (approximation)
-                # A more accurate F:M would use the influent zone COD
+            if aeration_r and aeration_r.mlss_mgl:
+                # Use aeration tank COD reading for F:M (approximation)
                 fm = calc_fm_ratio(
-                    cod_inf_mgl=aerobic_r.cod_mgl or 0.0,
+                    cod_inf_mgl=aeration_r.cod_mgl or 0.0,
                     q_in_mlh=flow.q_in_mlh or 0.0,
-                    mlss_mgl=aerobic_r.mlss_mgl or 0.0,
-                    vss_mgl=aerobic_r.vss_mgl if hasattr(aerobic_r, "vss_mgl") else None,
+                    mlss_mgl=aeration_r.mlss_mgl or 0.0,
+                    vss_mgl=aeration_r.vss_mgl if hasattr(aeration_r, "vss_mgl") else None,
                 )
 
-            temp = aerobic_r.temperature_c if aerobic_r else 22.0
-            warn = check_nitrifier_washout_risk(srt_d, temp or 22.0) if srt_d > 0 else None
+            temp = aeration_r.temperature_c if aeration_r else 22.0
+            warn = check_nitrifier_washout_risk(srt_d, temp or 22.0) if srt_d > 0 else None  # noqa: F821
 
             # Format values
             hrt_txt = f"{hrt_h:.1f} h" if hrt_h > 0 else "—"

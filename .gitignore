@@ -72,6 +72,7 @@ exports/
 # ── Packaging / distribution ──────────────────────────────────────────────────
 # digital_reactor.spec and installer/digital_reactor.iss ARE tracked (source files).
 # Only ignore generated build outputs:
+reactor.zip
 dist/
 build/
 installer/Output/

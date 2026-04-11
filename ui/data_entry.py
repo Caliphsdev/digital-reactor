@@ -36,20 +36,20 @@ from ui.theme import dark_date_edit_style
 
 
 # ── Zone and field definitions ─────────────────────────────────────────────────
-ZONES = ["anaerobic", "anoxic", "aerobic", "effluent"]
+ZONES = ["primary_settling", "aeration", "clarifier", "effluent"]
 
 ZONE_LABELS = {
-    "anaerobic": "Anaerobic",
-    "anoxic":    "Anoxic",
-    "aerobic":   "Aerobic",
-    "effluent":  "Effluent",
+    "primary_settling": "Primary Settling",
+    "aeration":         "Aeration Tank",
+    "clarifier":        "Clarifier",
+    "effluent":         "Effluent",
 }
 
 ZONE_COLORS = {
-    "anaerobic": "#8e44ad",
-    "anoxic":    "#2471a3",
-    "aerobic":   "#1e8449",
-    "effluent":  "#7f8c8d",
+    "primary_settling": "#795548",   # earthy brown — settling
+    "aeration":         "#1e8449",   # green — biological
+    "clarifier":        "#717d7e",   # grey — clarification
+    "effluent":         "#2e86c1",   # blue — treated water
 }
 
 # (db_field, display_label, unit, min, max, decimals)
@@ -67,30 +67,19 @@ ZONE_FIELDS = [
 
 # Normal operating ranges per zone — values outside trigger a red highlight
 RANGES: dict[str, dict[str, tuple[float, float]]] = {
-    "anaerobic": {
-        "do_mgl":        (0.0,    0.5),
-        "ph":            (6.5,    8.0),
-        "temperature_c": (18.0,  28.0),
+    "primary_settling": {
+        "do_mgl":        (0.0,    1.0),   # low/near-zero O₂ in settling tank
+        "ph":            (6.5,    8.5),
+        "temperature_c": (15.0,  30.0),
         "cod_mgl":       (50.0, 3000.0),
-        "nh4_mgl":       (0.0,  150.0),
+        "nh4_mgl":       (0.0,  200.0),
         "no3_mgl":       (0.0,   50.0),
         "so4_mgl":       (0.0,  800.0),
         "po4_mgl":       (0.0,   50.0),
-        "mlss_mgl":    (1000.0, 6000.0),
+        "mlss_mgl":      (50.0,  500.0),  # low — settling not biological
     },
-    "anoxic": {
-        "do_mgl":        (0.0,    0.5),
-        "ph":            (6.5,    8.0),
-        "temperature_c": (18.0,  28.0),
-        "cod_mgl":       (20.0, 1000.0),
-        "nh4_mgl":       (0.0,  100.0),
-        "no3_mgl":       (0.0,  100.0),
-        "so4_mgl":       (0.0,  800.0),
-        "po4_mgl":       (0.0,   50.0),
-        "mlss_mgl":    (1000.0, 6000.0),
-    },
-    "aerobic": {
-        "do_mgl":        (1.0,    2.0),   # critical — must stay 1–2 mg/L
+    "aeration": {
+        "do_mgl":        (1.0,    4.0),   # critical — target 1–3 mg/L
         "ph":            (6.5,    8.0),
         "temperature_c": (18.0,  28.0),
         "cod_mgl":       (5.0,  500.0),
@@ -98,7 +87,18 @@ RANGES: dict[str, dict[str, tuple[float, float]]] = {
         "no3_mgl":       (0.0,  100.0),
         "so4_mgl":       (0.0,  800.0),
         "po4_mgl":       (0.0,   30.0),
-        "mlss_mgl":    (1000.0, 6000.0),
+        "mlss_mgl":    (1000.0, 5000.0),
+    },
+    "clarifier": {
+        "do_mgl":        (0.0,    2.0),
+        "ph":            (6.5,    8.5),
+        "temperature_c": (15.0,  30.0),
+        "cod_mgl":       (5.0,  200.0),
+        "nh4_mgl":       (0.0,   30.0),
+        "no3_mgl":       (0.0,   50.0),
+        "so4_mgl":       (0.0,  800.0),
+        "po4_mgl":       (0.0,   20.0),
+        "mlss_mgl":      (50.0, 1000.0),  # low — post-settling supernatant
     },
     "effluent": {
         "do_mgl":        (0.0,   10.0),
@@ -130,33 +130,33 @@ ADVANCED_ZONE_FIELDS = [
 ]
 
 # Typical operating ranges for advanced parameters per zone.
-# ORP ranges are critical for verifying redox conditions:
-#   anaerobic: -200 to -100 mV  |  anoxic: -50 to +50 mV  |  aerobic: +50 to +200 mV
+# ORP ranges guide redox interpretation:
+#   primary_settling: variable  |  aeration: +50 to +200 mV (aerobic)
 ADVANCED_RANGES: dict[str, dict[str, tuple[float, float]]] = {
-    "anaerobic": {
-        "orp_mv":         (-300.0, -50.0),
-        "alkalinity_mgl": (50.0,  400.0),
+    "primary_settling": {
+        "orp_mv":         (-200.0,  50.0),
+        "alkalinity_mgl": (50.0,   500.0),
+        "vss_mgl":        (10.0,   500.0),
+        "tss_mgl":        (20.0,   600.0),
+    },
+    "aeration": {
+        "orp_mv":         (50.0,   250.0),  # aerobic conditions
+        "our_mgl_h":      (5.0,    60.0),
+        "alkalinity_mgl": (50.0,   300.0),
         "vss_mgl":        (500.0, 6000.0),
         "tss_mgl":        (500.0, 7000.0),
     },
-    "anoxic": {
-        "orp_mv":         (-100.0,  50.0),
+    "clarifier": {
+        "orp_mv":         (-50.0,  100.0),
         "alkalinity_mgl": (50.0,   400.0),
-        "vss_mgl":        (500.0, 6000.0),
-        "tss_mgl":        (500.0, 7000.0),
-    },
-    "aerobic": {
-        "orp_mv":         (50.0,  250.0),
-        "our_mgl_h":      (5.0,   60.0),
-        "alkalinity_mgl": (50.0,  300.0),
-        "vss_mgl":        (500.0, 6000.0),
-        "tss_mgl":        (500.0, 7000.0),
+        "vss_mgl":        (10.0,  1000.0),
+        "tss_mgl":        (10.0,  1200.0),
     },
     "effluent": {
-        "turbidity_ntu":  (0.0,   10.0),
-        "tss_mgl":        (0.0,   30.0),
-        "tp_mgl":         (0.0,   10.0),
-        "tn_mgl":         (0.0,   20.0),
+        "turbidity_ntu":  (0.0,    10.0),
+        "tss_mgl":        (0.0,    30.0),
+        "tp_mgl":         (0.0,    10.0),
+        "tn_mgl":         (0.0,    20.0),
     },
 }
 
@@ -518,11 +518,10 @@ class DataEntryScreen(QWidget):
 
         # (db_field, label, unit, default, min, max, decimals)
         flow_fields = [
-            ("q_in_mlh",        "Influent flow (Q_in)",      "mL/h",  320.0, 0.0, 2000.0, 1),
-            ("q_was_mlh",       "Waste sludge (Q_WAS)",      "mL/h",    0.0, 0.0, 1000.0, 1),
-            ("q_psludge_mlh",   "Primary sludge (Q_Psludge)","mL/h",    0.0, 0.0, 1000.0, 1),
-            ("ras_ratio",       "RAS ratio",                 "",        1.0, 0.0,   10.0, 2),
-            ("a_recycle_ratio", "a-recycle ratio",           "",        4.0, 0.0,   20.0, 2),
+            ("q_in_mlh",      "Influent flow (Q_in)",       "mL/h",  320.0, 0.0, 2000.0, 1),
+            ("q_was_mlh",     "Waste sludge (Q_WAS)",       "mL/h",    0.0, 0.0, 1000.0, 1),
+            ("q_psludge_mlh", "Primary sludge (Q_Psludge)", "mL/h",    0.0, 0.0, 1000.0, 1),
+            ("ras_ratio",     "RAS ratio",                  "",        1.0, 0.0,   10.0, 2),
         ]
 
         grid = QGridLayout()
@@ -713,12 +712,11 @@ class DataEntryScreen(QWidget):
                 if not existing_flow:
                     session.add(flow)
 
-                flow.q_in_mlh        = self._flow_spins["q_in_mlh"].value()
-                flow.q_was_mlh       = self._flow_spins["q_was_mlh"].value()
-                flow.q_psludge_mlh   = self._flow_spins["q_psludge_mlh"].value()
-                flow.ras_ratio       = self._flow_spins["ras_ratio"].value()
-                flow.a_recycle_ratio = self._flow_spins["a_recycle_ratio"].value()
-                flow.notes           = self._flow_notes.toPlainText().strip() or None
+                flow.q_in_mlh      = self._flow_spins["q_in_mlh"].value()
+                flow.q_was_mlh     = self._flow_spins["q_was_mlh"].value()
+                flow.q_psludge_mlh = self._flow_spins["q_psludge_mlh"].value()
+                flow.ras_ratio     = self._flow_spins["ras_ratio"].value()
+                flow.notes         = self._flow_notes.toPlainText().strip() or None
 
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", f"Could not save readings:\n\n{exc}")

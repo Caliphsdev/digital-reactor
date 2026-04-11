@@ -34,13 +34,14 @@ MAIN_MODEL_THRESHOLD = 50   # complete daily rows needed to train the main model
 PFAS_MODEL_THRESHOLD = 15   # paired CEC rows needed to train the PFAS model
 
 # ── Feature column order — must stay constant after first training ─────────────
+# Note: a_recycle_ratio removed (CAS reactor has no anoxic zone recycle)
 MAIN_FEATURE_COLS = [
-    "q_in_mlh", "ras_ratio", "a_recycle_ratio",
+    "q_in_mlh", "ras_ratio",
     "do_mgl", "srt_days", "temp_c", "ph", "mlss_mgl",
     "inf_cod", "inf_nh4", "inf_tp",
 ]
 PFAS_FEATURE_COLS = [
-    "q_in_mlh", "ras_ratio", "a_recycle_ratio",
+    "q_in_mlh", "ras_ratio",
     "do_mgl", "srt_days", "temp_c", "ph", "mlss_mgl",
     "inf_pfas", "pfas_type_encoded",  # 0 = short-chain, 1 = long-chain
 ]
@@ -78,15 +79,15 @@ def get_training_data(session) -> pd.DataFrame:
             data.append({k: getattr(r, v) for k, v in cols.items()})
         return pd.DataFrame(data)
 
-    aerobic_rows   = session.query(DailyReading).filter(DailyReading.zone == "aerobic").all()
+    aeration_rows  = session.query(DailyReading).filter(DailyReading.zone == "aeration").all()
     effluent_rows  = session.query(DailyReading).filter(DailyReading.zone == "effluent").all()
-    anaerobic_rows = session.query(DailyReading).filter(DailyReading.zone == "anaerobic").all()
+    pst_rows       = session.query(DailyReading).filter(DailyReading.zone == "primary_settling").all()
     flow_rows      = session.query(FlowReading).all()
 
-    if not aerobic_rows or not effluent_rows or not anaerobic_rows or not flow_rows:
+    if not aeration_rows or not effluent_rows or not pst_rows or not flow_rows:
         return pd.DataFrame()
 
-    df_aer = _to_df(aerobic_rows, {
+    df_aer = _to_df(aeration_rows, {
         "experiment_id": "experiment_id",
         "reading_date":  "reading_date",
         "do_mgl":        "do_mgl",
@@ -103,7 +104,7 @@ def get_training_data(session) -> pd.DataFrame:
         "eff_tp":        "tp_mgl",
     })
 
-    df_ana = _to_df(anaerobic_rows, {
+    df_ana = _to_df(pst_rows, {
         "experiment_id": "experiment_id",
         "reading_date":  "reading_date",
         "inf_cod":       "cod_mgl",
@@ -119,7 +120,6 @@ def get_training_data(session) -> pd.DataFrame:
         "q_in_mlh":        "q_in_mlh",
         "q_was_mlh":       "q_was_mlh",
         "ras_ratio":       "ras_ratio",
-        "a_recycle_ratio": "a_recycle_ratio",
     })
 
     # INNER JOIN — all four must be present on the same day for a valid training row
@@ -196,9 +196,10 @@ def get_pfas_training_data(session) -> pd.DataFrame:
 
     # Effluent below detection → use half the detection limit (censored-data convention)
     mask_bdl = df_cec["below_detection_eff"] == True
-    df_cec.loc[mask_bdl, "concentration_eff"] = (
-        df_cec.loc[mask_bdl, "detection_limit_eff"] / 2.0
-    )
+    if mask_bdl.any():
+        df_cec.loc[mask_bdl, "concentration_eff"] = (
+            df_cec.loc[mask_bdl, "detection_limit_eff"].fillna(0.0) / 2.0
+        )
 
     df_cec["pfas_type_encoded"] = (df_cec["cec_type_in"] == "long-chain").astype(int)
     df_cec["pfas_removal_pct"] = df_cec.apply(
@@ -426,7 +427,6 @@ def run_phase2(inputs: SimInputs) -> SimOutputs:
         X = np.array([[
             inputs.flow_rate_mlh,
             inputs.ras_ratio,
-            inputs.a_recycle,
             inputs.do_mgl,
             inputs.srt_days,
             inputs.temp_c,
@@ -455,7 +455,6 @@ def run_phase2(inputs: SimInputs) -> SimOutputs:
         X_p = np.array([[
             inputs.flow_rate_mlh,
             inputs.ras_ratio,
-            inputs.a_recycle,
             inputs.do_mgl,
             inputs.srt_days,
             inputs.temp_c,

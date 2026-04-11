@@ -59,7 +59,9 @@ class DailyReading(Base):
     id            = Column(Integer, primary_key=True, autoincrement=True)
     experiment_id = Column(Integer, ForeignKey("experiments.id"), nullable=False)
     reading_date  = Column(Date, nullable=False)
-    zone          = Column(String, nullable=False)   # "anaerobic" | "anoxic" | "aerobic" | "effluent"
+    zone          = Column(String, nullable=False)
+    # Current physical layout: "primary_settling" | "aeration" | "clarifier" | "effluent"
+    # Historical zone names (pre-CAS overhaul): "anaerobic" | "anoxic" | "aerobic" | "effluent"
     do_mgl        = Column(Float, nullable=True)     # Dissolved Oxygen (mg/L)
     ph            = Column(Float, nullable=True)
     temperature_c = Column(Float, nullable=True)

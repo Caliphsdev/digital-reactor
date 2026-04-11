@@ -287,12 +287,13 @@ The rate halves approximately every 10°C below optimal (15–25°C range).</p>
 <hr>
 <h3>10 · Total Phosphorus Removal (Bio-P)</h3>
 <div class="eq">
-TP_removal = min(0.92, (0.40 + a_recycle × 0.08) × θ^(T−20))
+TP_removal = min(0.75, (0.30 + RAS_ratio × 0.04) × θ^(T−20))
 </div>
-<p>Bio-P relies on PAOs cycling through the anaerobic zone (phosphorus release)
-then the aerobic zone (phosphorus uptake). The a-recycle ratio controls how
-much NO₃ reaches the anoxic zone for denitrification (and indirectly, how
-much substrate reaches the anaerobic zone for PAOs).</p>
+<p>In the CAS (Conventional Activated Sludge) configuration, TP removal occurs
+by luxury uptake in the Aeration Tank. Re-aeration of the Return Activated
+Sludge (RAS) from the Clarifier promotes phosphorus uptake by PAOs.
+A higher RAS ratio increases the fraction of re-aerated sludge recycled
+back to the aeration inlet, slightly improving TP removal.</p>
 
 <hr>
 <h3>11 · PFAS Removal (Solid-Water Partitioning)</h3>
