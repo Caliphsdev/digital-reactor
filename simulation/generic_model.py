@@ -26,29 +26,83 @@ AERATION_VOLUME_L  =  8.0   # aeration tank volume — used for biological HRT
 PST_COD_REMOVAL = 0.30   # 25–35% COD removed by physical settling
 PST_TSS_REMOVAL = 0.60   # 55–65% TSS removed (textbook range)
 
-# ── Kd values (solid-water partition coefficient, L/kg MLSS) ─────────────────
-# Literature values for PFAS adsorption onto activated sludge.
-# Short-chain: low Kd  → most stays in water → passes to effluent
-# Long-chain:  high Kd → more adsorbs to sludge → less in effluent
-KD_SHORT_CHAIN = 0.8    # L/kg  (conservative — e.g. PFBA, PFBS)
-KD_LONG_CHAIN  = 4.5    # L/kg  (e.g. PFOS, PFOA)
+# ── Compound-specific Kd table (solid-water partition coefficient, L/kg MLSS) ───
+# Literature values from Higgins & Luthy (2006), Xiao et al. (2015),
+# and Ahrens & Bundschuh (2014) for PFAS adsorption onto activated sludge.
+# Used when a specific compound name is supplied.  The class fallbacks below
+# are used when only the chain type ("short-chain" | "long-chain") is known.
+PFAS_KD_TABLE: dict[str, float] = {
+    # ── Long-chain PFAS ───────────────────────────────────────────────────────
+    # Perfluoroalkyl sulfonates (C ≥ 6) — highest sorption
+    "PFOS":   7.0,   # C8 sulfonate  — Higgins & Luthy 2006
+    "PFHxS":  3.5,   # C6 sulfonate
+    "PFNS":   5.5,   # C9 sulfonate
+    "PFDS":  10.5,   # C10 sulfonate
+    # Perfluoroalkyl carboxylates (C ≥ 8)
+    "PFOA":   2.5,   # C8 carboxylate — Higgins & Luthy 2006
+    "PFNA":   5.0,   # C9 carboxylate
+    "PFDA":   9.0,   # C10 carboxylate
+    "PFUnA": 15.0,   # C11 carboxylate
+    "PFUnDA": 15.0,  # common alternate abbreviation for PFUnA
+    "PFDoA": 22.0,   # C12 carboxylate
+    # ── Short-chain PFAS ─────────────────────────────────────────────────────
+    # Perfluoroalkyl sulfonates (C < 6)
+    "PFBS":   0.5,   # C4 sulfonate
+    "PFPeS":  1.0,   # C5 sulfonate
+    # Perfluoroalkyl carboxylates (C < 8)
+    "PFBA":   0.3,   # C4 carboxylate
+    "PFPeA":  0.5,   # C5 carboxylate
+    "PFHxA":  0.7,   # C6 carboxylate
+    "PFHpA":  1.2,   # C7 carboxylate
+}
+# Class fallbacks (used when compound is unknown)
+KD_SHORT_CHAIN = 0.8    # L/kg  (conservative class average)
+KD_LONG_CHAIN  = 4.5    # L/kg  (class average)
+
+
+def get_kd(pfas_compound: str, pfas_type: str) -> float:
+    """
+    Return the solid-water partition coefficient (L/kg MLSS) for a PFAS.
+
+    Looks up the compound name first (case-insensitive) in PFAS_KD_TABLE;
+    falls back to the class-average KD_SHORT_CHAIN / KD_LONG_CHAIN when the
+    compound is not listed.
+    """
+    if pfas_compound:
+        wanted = pfas_compound.strip().casefold()
+        for compound, kd in PFAS_KD_TABLE.items():
+            if compound.casefold() == wanted:
+                return kd
+    return KD_LONG_CHAIN if pfas_type == "long-chain" else KD_SHORT_CHAIN
+
+
+# ── Monod kinetic constants for nitrification (ASM1 / Metcalf & Eddy 2014) ───
+# Nitrosomonas (AOB) parameters — rate-limiting step for nitrification in CAS
+MU_MAX_N   = 0.75   # /day    maximum AOB growth rate at 20°C
+KS_N       = 0.74   # mg/L   NH4-N half-saturation constant (Metcalf & Eddy)
+KO_N       = 0.50   # mg/L   DO half-saturation for AOB
+B_N        = 0.08   # /day   AOB endogenous decay rate
+THETA_N    = 1.072  # –       temperature correction for µmax_N (AOB)
+THETA_B    = 1.029  # –       temperature correction for b_N
 
 
 @dataclass
 class SimInputs:
     """All operating parameters fed into the Phase 1 CAS model."""
-    flow_rate_mlh:  float   # influent flow (mL/h)
-    ras_ratio:      float   # RAS recycle ratio (unitless) — Clarifier → Aeration inlet
-    do_mgl:         float   # aeration tank DO (mg/L)
-    srt_days:       float   # sludge retention time (days)
-    temp_c:         float   # temperature (°C)
-    ph:             float   # pH (unitless)
-    inf_cod:        float   # influent COD (mg/L)
-    inf_nh4:        float   # influent NH4-N (mg/L)
-    inf_tp:         float   # influent total phosphorus (mg/L)
-    inf_pfas:       float   # influent PFAS concentration (µg/L)
-    pfas_type:      str     # "short-chain" | "long-chain"
-    mlss_mgl:       float   # mixed liquor SS in aeration tank (mg/L)
+    flow_rate_mlh:   float   # influent flow (mL/h)
+    ras_ratio:       float   # RAS recycle ratio (unitless) — Clarifier → Aeration inlet
+    do_mgl:          float   # aeration tank DO (mg/L)
+    srt_days:        float   # sludge retention time (days)
+    temp_c:          float   # temperature (°C)
+    ph:              float   # pH (unitless)
+    inf_cod:         float   # influent COD (mg/L)
+    inf_nh4:         float   # influent NH4-N (mg/L)
+    inf_tp:          float   # influent total phosphorus (mg/L)
+    inf_pfas:        float   # influent PFAS concentration (µg/L)
+    pfas_type:       str     # "short-chain" | "long-chain"
+    mlss_mgl:        float   # mixed liquor SS in aeration tank (mg/L)
+    pfas_compound:   str = ""  # specific compound name e.g. "PFOS", "PFOA"
+                               # if provided, looks up Kd from PFAS_KD_TABLE
 
 
 @dataclass
@@ -72,6 +126,15 @@ class SimOutputs:
     nitrifier_min_srt: float  # minimum SRT for nitrifiers at this temperature (days)
     alk_consumed_mgl: float   # estimated alkalinity consumed by nitrification (mg CaCO3/L)
     warnings: list[str]
+    # 90 % prediction intervals — (low, high) tuples; None when unavailable
+    # Populated by Phase 2 RF inference; Phase 1 always leaves these as None.
+    cod_ci:  tuple[float, float] | None = None   # % removal interval
+    nh4_ci:  tuple[float, float] | None = None
+    tp_ci:   tuple[float, float] | None = None
+    pfas_ci: tuple[float, float] | None = None
+    # Compound-level PFAS metadata
+    pfas_compound_used: str = ""    # which compound was looked up (empty = class avg)
+    monod_washout: bool = False      # True when Monod equation predicts nitrifier washout
 
 
 def run_phase1(inputs: SimInputs) -> SimOutputs:
@@ -140,13 +203,41 @@ def run_phase1(inputs: SimInputs) -> SimOutputs:
     cod_removal     = 1.0 - (eff_cod / inputs.inf_cod) if inputs.inf_cod > 0 else 0.0
     cod_removal     = max(0.0, min(0.99, cod_removal))
 
-    # ── NH4 removal (nitrification in Aeration Tank) ───────────────────────
-    # From 03_EQUATIONS.md:  NH4_removal = min(0.98, 0.55 + DO×0.12 + SRT×0.01)
-    nh4_removal = (0.55 + inputs.do_mgl * 0.12 + inputs.srt_days * 0.01) * temp_factor
-    nh4_removal = max(0.0, min(0.98, nh4_removal))
+    # ── NH4 removal (Monod steady-state nitrification — ASM1, Metcalf & Eddy 2014) ──
+    # At steady-state in a CSTR with SRT control, the effluent NH4 concentration is:
+    #
+    #   Se_nh4 = Ks_n · (1 + b_n_T · SRT)
+    #            ─────────────────────────────────────────────────────
+    #            SRT · [µmax_n_T · DO/(Ko_n + DO) − b_n_T]  −  1
+    #
+    # where µmax_n_T and b_n_T are temperature-corrected via separate θ values.
+    # Denominator ≤ 0  → nitrifiers cannot grow (washout)
+    # Se_nh4 < 0       → complete nitrification (cap effluent at ~0)
+    mu_max_n_T = MU_MAX_N * (THETA_N ** (inputs.temp_c - 20.0))
+    b_n_T      = B_N      * (THETA_B ** (inputs.temp_c - 20.0))
+    do_factor  = inputs.do_mgl / (KO_N + inputs.do_mgl) if (KO_N + inputs.do_mgl) > 0 else 0.0
+    mu_net_n   = mu_max_n_T * do_factor - b_n_T
+
+    monod_washout = False
+    denom = inputs.srt_days * mu_net_n - 1.0
+    if denom <= 0 or inputs.srt_days <= 0:
+        # Nitrifiers wash out — no biological NH4 removal
+        nh4_removal  = 0.0
+        monod_washout = True
+    else:
+        numer       = KS_N * (1.0 + b_n_T * inputs.srt_days)
+        se_nh4      = numer / denom
+        if se_nh4 < 0:
+            se_nh4 = 0.0   # complete nitrification
+        nh4_removal = 1.0 - (se_nh4 / inputs.inf_nh4) if inputs.inf_nh4 > 0 else 0.0
+        nh4_removal = max(0.0, min(0.98, nh4_removal))
 
     # Minimum SRT for nitrifiers at current temperature (Metcalf & Eddy, 2014)
-    nitrifier_min_srt = 3.0 * (1.123 ** (15.0 - inputs.temp_c)) if inputs.temp_c < 15 else 5.0
+    # SRTmin = (1/µmax_n_T · DO/(Ko_n+DO) - b_n_T) + safety
+    if mu_net_n > 0:
+        nitrifier_min_srt = 1.0 / mu_net_n
+    else:
+        nitrifier_min_srt = 999.0  # effectively infinite at this temperature/DO
     if inputs.srt_days < nitrifier_min_srt * 1.5:
         warnings.append(
             f"Nitrifier washout risk: SRT {inputs.srt_days:.1f}d < recommended "
@@ -165,7 +256,8 @@ def run_phase1(inputs: SimInputs) -> SimOutputs:
     # ── PFAS removal (solid-water partitioning via Kd) ────────────────────────
     # From 03_EQUATIONS.md:  adsorption_fraction = Kd×MLSS / (1 + Kd×MLSS)
     # MLSS must be in kg/L for unit consistency: mg/L ÷ 1,000,000 → kg/L
-    kd = KD_LONG_CHAIN if inputs.pfas_type == "long-chain" else KD_SHORT_CHAIN
+    # Uses compound-specific Kd from PFAS_KD_TABLE when pfas_compound is given.
+    kd = get_kd(inputs.pfas_compound, inputs.pfas_type)
     mlss_kg_per_l = inputs.mlss_mgl / 1_000_000.0
     if mlss_kg_per_l > 0 and kd > 0:
         adsorption = (kd * mlss_kg_per_l) / (1.0 + kd * mlss_kg_per_l)
@@ -191,19 +283,21 @@ def run_phase1(inputs: SimInputs) -> SimOutputs:
     alk_consumed_mgl = nh4_removed_mgl * 7.14
 
     return SimOutputs(
-        cod_removal_pct    = cod_removal  * 100,
-        nh4_removal_pct    = nh4_removal  * 100,
-        tp_removal_pct     = tp_removal   * 100,
-        pfas_removal_pct   = pfas_removal * 100,
-        eff_cod            = max(0.0, eff_cod),
-        eff_nh4            = max(0.0, eff_nh4),
-        eff_tp             = max(0.0, eff_tp),
-        eff_pfas           = max(0.0, eff_pfas),
-        hrt_days           = hrt_total_days,
-        kd_used            = kd,
-        temp_factor        = temp_factor,
-        fm_ratio           = fm_ratio,
-        nitrifier_min_srt  = nitrifier_min_srt,
-        alk_consumed_mgl   = alk_consumed_mgl,
-        warnings           = warnings,
+        cod_removal_pct      = cod_removal  * 100,
+        nh4_removal_pct      = nh4_removal  * 100,
+        tp_removal_pct       = tp_removal   * 100,
+        pfas_removal_pct     = pfas_removal * 100,
+        eff_cod              = max(0.0, eff_cod),
+        eff_nh4              = max(0.0, eff_nh4),
+        eff_tp               = max(0.0, eff_tp),
+        eff_pfas             = max(0.0, eff_pfas),
+        hrt_days             = hrt_total_days,
+        kd_used              = kd,
+        temp_factor          = temp_factor,
+        fm_ratio             = fm_ratio,
+        nitrifier_min_srt    = nitrifier_min_srt,
+        alk_consumed_mgl     = alk_consumed_mgl,
+        warnings             = warnings,
+        monod_washout        = monod_washout,
+        pfas_compound_used   = inputs.pfas_compound or "",
     )

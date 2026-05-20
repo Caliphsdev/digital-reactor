@@ -31,6 +31,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QSize, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QFont
 
+from core.database import get_session
+from core.models import Experiment
+
 
 # ── Window dimensions ─────────────────────────────────────────────────────────
 WINDOW_WIDTH  = 1280   # default startup size
@@ -52,6 +55,8 @@ COLOR_DIVIDER      = "#3d5166"
 COLOR_CONTENT_BG   = "#f0f3f4"
 COLOR_ICON         = "#ecf0f1"   # icon colour in normal state
 COLOR_ICON_ACTIVE  = "#ffffff"   # icon colour when button is active
+COLOR_EXP_BAR_BG   = "#eaf2f8"
+COLOR_EXP_BAR_TEXT = "#1f3a5f"
 
 
 # ── Placeholder screen ─────────────────────────────────────────────────────────
@@ -174,6 +179,7 @@ class MainWindow(QMainWindow):
         ("fa6s.vial",            "CEC Tracker",   "CEC Tracker"),
         ("fa6s.scale-balanced",  "Mass Balance",  "Mass Balance Calculator"),
         ("fa6s.microscope",      "Simulation",    "Simulation"),
+        ("fa6s.industry",        "Plants",        "Real Plant Scientific Twins"),
         ("fa6s.chart-line",      "Comparison",    "Comparison Dashboard"),
         ("fa6s.gear",            "Settings",      "Settings"),
         ("fa6s.book-open",       "Manual",        "User Manual"),
@@ -190,6 +196,9 @@ class MainWindow(QMainWindow):
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
 
         self._sidebar_expanded = True   # tracks current sidebar state
+        self._anim = None
+        self._anim2 = None
+        self._exp_context_label = None
 
         # ── Root layout ────────────────────────────────────────────────────────
         central = QWidget()
@@ -283,16 +292,66 @@ class MainWindow(QMainWindow):
         return sidebar
 
     # ── Content area ───────────────────────────────────────────────────────────
-    def _build_content(self) -> QStackedWidget:
+    def _build_content(self) -> QWidget:
         """
         Build the QStackedWidget that holds all screens.
         Index matches NAV_ITEMS order — _go_to(i) shows screen i.
         """
+        content = QWidget()
+        content.setStyleSheet(f"background-color: {COLOR_CONTENT_BG};")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._exp_context_bar = self._build_experiment_context_bar()
+        layout.addWidget(self._exp_context_bar)
+
         self._stack = QStackedWidget()
         self._stack.setStyleSheet(f"background-color: {COLOR_CONTENT_BG};")
         for _, _, title in self.NAV_ITEMS:
             self._stack.addWidget(PlaceholderScreen(title))
-        return self._stack
+        layout.addWidget(self._stack, stretch=1)
+
+        self.refresh_active_experiment()
+        return content
+
+    def _build_experiment_context_bar(self) -> QWidget:
+        """Create the global active-experiment context bar above the content stack."""
+        bar = QWidget()
+        bar.setFixedHeight(34)
+        bar.setStyleSheet(
+            f"background:{COLOR_EXP_BAR_BG}; border-bottom:1px solid #c5d8ea;"
+        )
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(12, 0, 12, 0)
+        row.setSpacing(10)
+
+        icon = QLabel()
+        icon.setPixmap(qta.icon("fa6s.flask", color="#2c6fa6").pixmap(QSize(13, 13)))
+        row.addWidget(icon)
+
+        self._exp_context_label = QLabel("Active experiment: loading…")
+        self._exp_context_label.setStyleSheet(
+            f"color:{COLOR_EXP_BAR_TEXT}; font-size:11px; font-weight:600;"
+        )
+        row.addWidget(self._exp_context_label)
+        row.addStretch()
+
+        switch_btn = QPushButton("Switch")
+        switch_btn.setCursor(Qt.PointingHandCursor)
+        switch_btn.setFixedHeight(24)
+        switch_btn.setStyleSheet(
+            "QPushButton {"
+            "  background:#2c6fa6; color:#ffffff; border:none;"
+            "  border-radius:4px; padding:0 10px; font-size:10px; font-weight:600;"
+            "}"
+            "QPushButton:hover { background:#3b82bd; }"
+            "QPushButton:pressed { background:#245b88; }"
+        )
+        switch_btn.clicked.connect(lambda: self._go_to(1))
+        row.addWidget(switch_btn)
+
+        return bar
 
     # ── Sidebar toggle ─────────────────────────────────────────────────────────
     def _toggle_sidebar(self) -> None:
@@ -336,11 +395,39 @@ class MainWindow(QMainWindow):
         Switch the content area to screen `index` and update nav highlights.
 
         Args:
-            index: 0=Home … 7=Settings (matches NAV_ITEMS order).
+            index: 0=Home … 9=Manual (matches NAV_ITEMS order).
         """
+        current_widget = self._stack.currentWidget()
+        if current_widget and index != self._stack.currentIndex():
+            confirm = getattr(current_widget, "confirm_discard_changes", None)
+            if callable(confirm) and not confirm():
+                return
+
         for i, btn in enumerate(self._nav_buttons):
             btn.set_active(i == index, self._sidebar_expanded)
         self._stack.setCurrentIndex(index)
+        self.refresh_active_experiment()
+
+    def refresh_active_experiment(self) -> None:
+        """Refresh the global active-experiment context text from the database."""
+        try:
+            with get_session() as session:
+                exp = session.query(Experiment).filter_by(is_active=True).first()
+            if exp:
+                self._exp_context_label.setText(f"Active experiment: {exp.name}")
+                self._exp_context_label.setStyleSheet(
+                    f"color:{COLOR_EXP_BAR_TEXT}; font-size:11px; font-weight:600;"
+                )
+            else:
+                self._exp_context_label.setText("No active experiment selected")
+                self._exp_context_label.setStyleSheet(
+                    "color:#b03a2e; font-size:11px; font-weight:600;"
+                )
+        except Exception:
+            self._exp_context_label.setText("Active experiment unavailable")
+            self._exp_context_label.setStyleSheet(
+                "color:#b03a2e; font-size:11px; font-weight:600;"
+            )
 
     # ── Public API for future build steps ──────────────────────────────────────
     def replace_screen(self, index: int, widget: QWidget) -> None:
@@ -349,7 +436,7 @@ class MainWindow(QMainWindow):
         Called by each build step once its screen is complete.
 
         Args:
-            index:  Position in NAV_ITEMS (0=Home … 7=Settings).
+            index:  Position in NAV_ITEMS (0=Home … 9=Manual).
             widget: The real screen widget to insert.
         """
         old = self._stack.widget(index)

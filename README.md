@@ -14,6 +14,7 @@ Built for PhD research at the **Department of Environmental Management**, as a d
 - **CEC Tracker** — Log PFAS/CEC concentrations at 4 sampling points with automatic removal efficiency calculations
 - **Mass Balance Calculator** — Quantify CEC fate: effluent vs sludge vs transformation using proposal equations
 - **Simulation** — Phase 1 generic model (textbook equations); Phase 2 data-driven ML model (activates after ≥50 data points)
+- **Real Plant Scientific Twins** — Daspoort, Zeekoegat, and Phola plant pages with process trains, sampling maps, plant-scale CEC/PFAS fate simulations, and Daspoort monitoring-data calibration
 - **Comparison Dashboard** — Lab reactor vs Daspoort WWTP field data across 4 chart tabs
 - **Process Metrics** — Automatic calculation of HRT, actual SRT, F:M ratio, and nitrifier washout risk
 - **Built-in Manual** — 13-topic in-app reference covering all equations, process science, and how-to guides
@@ -148,7 +149,7 @@ AppData\DigitalReactor\models\
 
 This location is completely separate from the installation folder — updating or reinstalling the application **never touches the researcher's data**.
 
-### Tables (8)
+### Tables (13)
 
 | Table | Purpose |
 | --- | --- |
@@ -160,6 +161,11 @@ This location is completely separate from the installation folder — updating o
 | `simulation_runs` | Saved what-if simulation scenarios |
 | `daspoort_monitoring` | Quarterly Daspoort WWTP field data |
 | `sludge_characterization` | Weekly SVI settling test results |
+| `plants` | Real full-scale plant profiles for Scientific Twin simulations |
+| `plant_units` | Ordered treatment units for each real plant |
+| `plant_sampling_points` | Plant-specific monitoring and sampling locations |
+| `plant_monitoring_readings` | Field readings for later plant calibration and comparison |
+| `plant_calibrations` | Target-wise Daspoort calibration multipliers and validation metrics |
 
 > **Note:** `reactor.db` and `models/*.joblib` are excluded from version control (`.gitignore`) as they contain research data and machine-specific trained models. Back up the database regularly using **Settings → Data Management → Backup Now**.
 

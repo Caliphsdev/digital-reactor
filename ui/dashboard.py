@@ -11,14 +11,14 @@ Export button saves all four charts as PNG images to a chosen folder.
 """
 
 import os
-from datetime import date, datetime
+from datetime import datetime
 from collections import defaultdict
 
 import qtawesome as qta
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTabWidget, QComboBox, QFileDialog, QMessageBox, QSizePolicy,
-    QFrame,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
 )
 from PySide6.QtCharts import (
     QChart, QChartView, QLineSeries,
@@ -30,7 +30,7 @@ from PySide6.QtGui import QPainter, QColor, QBrush, QFont
 from core.database import get_session
 from core.models import (
     MassBalanceResult, DailyReading, CECReading,
-    SimulationRun, DaspoortMonitoring,
+    SimulationRun, DaspoortMonitoring, Experiment, FlowReading,
 )
 
 
@@ -122,6 +122,13 @@ class DashboardScreen(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._dq_active_lbl = None
+        self._dq_completeness_lbl = None
+        self._dq_override_lbl = None
+        self._dq_status_lbl = None
+        self._dq_table = None
+        self._dq_completeness_view = None
+        self._dq_override_view = None
         self._build_ui()
         self.refresh()
 
@@ -210,11 +217,13 @@ class DashboardScreen(QWidget):
         self._tab_mv = self._build_tab_model_vs_actual()
         self._tab_ct = self._build_tab_cec_trends()
         self._tab_pt = self._build_tab_param_trends()
+        self._tab_dq = self._build_tab_data_quality()
 
         self._tabs.addTab(self._tab_ld, "  Lab vs Daspoort  ")
         self._tabs.addTab(self._tab_mv, "  Model vs Actual  ")
         self._tabs.addTab(self._tab_ct, "  CEC Trends  ")
         self._tabs.addTab(self._tab_pt, "  Parameter Trends  ")
+        self._tabs.addTab(self._tab_dq, "  Data Quality  ")
 
     # ── Tab 1: Lab vs Daspoort ─────────────────────────────────────────────────
 
@@ -661,15 +670,282 @@ class DashboardScreen(QWidget):
         axis_y.setRange(0, max_val * 1.15 if max_val > 0 else 10.0)
         self._pt_view.setChart(chart)
 
+    # ── Tab 5: Data Quality ───────────────────────────────────────────────────
+
+    def _build_tab_data_quality(self) -> QWidget:
+        """Tab 5: Data quality KPIs and recent QA override events."""
+        w = QWidget()
+        w.setStyleSheet(f"background:{C_CARD};")
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(10)
+
+        # Top KPI row
+        kpi_row = QHBoxLayout()
+        kpi_row.setSpacing(8)
+
+        self._dq_active_lbl = self._make_kpi_card("Active Experiment", "—", "#2471a3")
+        self._dq_completeness_lbl = self._make_kpi_card("Daily Completeness", "—", "#1e8449")
+        self._dq_override_lbl = self._make_kpi_card("QA Overrides", "—", "#d68910")
+        self._dq_status_lbl = self._make_kpi_card("Quality Status", "—", "#8e44ad")
+
+        kpi_row.addWidget(self._dq_active_lbl)
+        kpi_row.addWidget(self._dq_completeness_lbl)
+        kpi_row.addWidget(self._dq_override_lbl)
+        kpi_row.addWidget(self._dq_status_lbl)
+        layout.addLayout(kpi_row)
+
+        trend_row = QHBoxLayout()
+        trend_row.setSpacing(8)
+
+        self._dq_completeness_view = _make_chart_view(
+            _make_chart("Weekly Daily-Log Completeness (%)")
+        )
+        self._dq_completeness_view.setMinimumHeight(190)
+        trend_row.addWidget(self._dq_completeness_view)
+
+        self._dq_override_view = _make_chart_view(
+            _make_chart("Weekly QA Overrides (count)")
+        )
+        self._dq_override_view.setMinimumHeight(190)
+        trend_row.addWidget(self._dq_override_view)
+
+        layout.addLayout(trend_row)
+
+        subtitle = QLabel("Recent QA Override / Validation Flags")
+        subtitle.setStyleSheet(f"color:{C_MUTED}; font-size:10px; font-weight:600;")
+        layout.addWidget(subtitle)
+
+        self._dq_table = QTableWidget(0, 5)
+        self._dq_table.setHorizontalHeaderLabels([
+            "Date", "Source", "Context", "Severity", "Excerpt",
+        ])
+        self._dq_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self._dq_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self._dq_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self._dq_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self._dq_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self._dq_table.verticalHeader().setVisible(False)
+        self._dq_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._dq_table.setAlternatingRowColors(True)
+        self._dq_table.setShowGrid(False)
+        self._dq_table.setStyleSheet("""
+            QTableWidget { background:#fff; border:1px solid #dde1e7;
+                border-radius:6px; font-size:11px;
+                alternate-background-color:#f8f9fa; }
+            QHeaderView::section { background:#2c3e50; color:#ecf0f1;
+                font-weight:bold; font-size:10px; padding:6px; border:none; }
+            QTableWidget::item { padding:4px 8px; }
+        """)
+        layout.addWidget(self._dq_table, stretch=1)
+
+        return w
+
+    def _make_kpi_card(self, title: str, value: str, color: str) -> QWidget:
+        """Simple reusable KPI card used in Data Quality tab."""
+        card = QWidget()
+        card.setStyleSheet(
+            f"QWidget {{ background:#ffffff; border:1px solid {C_BORDER}; border-radius:6px; }}"
+        )
+        v = QVBoxLayout(card)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(2)
+
+        t = QLabel(title)
+        t.setStyleSheet(f"color:{C_MUTED}; font-size:10px; font-weight:600;")
+        v.addWidget(t)
+
+        val = QLabel(value)
+        val.setStyleSheet(f"color:{color}; font-size:14px; font-weight:700;")
+        v.addWidget(val)
+        v.addStretch()
+
+        card.value_label = val
+        return card
+
+    def _refresh_data_quality(self):
+        """Compute completeness and override metrics for active experiment."""
+        with get_session() as s:
+            active = s.query(Experiment).filter_by(is_active=True).first()
+            if not active:
+                self._dq_active_lbl.value_label.setText("None")
+                self._dq_completeness_lbl.value_label.setText("—")
+                self._dq_override_lbl.value_label.setText("—")
+                self._dq_status_lbl.value_label.setText("Set active run")
+                self._dq_table.setRowCount(0)
+                self._dq_completeness_view.setChart(_make_chart("Weekly Daily-Log Completeness (%)"))
+                self._dq_override_view.setChart(_make_chart("Weekly QA Overrides (count)"))
+                return
+
+            self._dq_active_lbl.value_label.setText(active.name)
+
+            daily_rows = (
+                s.query(DailyReading)
+                .filter(DailyReading.experiment_id == active.id)
+                .all()
+            )
+            flow_rows = (
+                s.query(FlowReading)
+                .filter(FlowReading.experiment_id == active.id)
+                .all()
+            )
+            cec_rows = (
+                s.query(CECReading)
+                .filter(CECReading.experiment_id == active.id)
+                .all()
+            )
+
+        core_fields = [
+            "do_mgl", "ph", "temperature_c", "cod_mgl", "nh4_mgl",
+            "no3_mgl", "po4_mgl", "mlss_mgl",
+        ]
+        total_cells = len(daily_rows) * len(core_fields)
+        missing_cells = 0
+        for row in daily_rows:
+            for field in core_fields:
+                if getattr(row, field, None) is None:
+                    missing_cells += 1
+        completeness = 100.0 if total_cells == 0 else (1.0 - (missing_cells / total_cells)) * 100.0
+        self._dq_completeness_lbl.value_label.setText(f"{completeness:.1f}%")
+
+        override_events: list[tuple] = []
+
+        def _collect_override(source: str, date_val, context: str, notes: str | None):
+            if notes and "[QA Override" in notes:
+                sev = "Warning"
+                low = notes.lower()
+                if "non-physical" in low or "error" in low:
+                    sev = "Critical"
+                excerpt = notes.split("\n", 1)[0][:140]
+                override_events.append((date_val, source, context, sev, excerpt))
+
+        for row in daily_rows:
+            _collect_override("Daily", row.reading_date, row.zone or "zone", row.notes)
+        for row in flow_rows:
+            _collect_override("Flow", row.reading_date, "flow", row.notes)
+        for row in cec_rows:
+            _collect_override("CEC", row.reading_date, row.sampling_point or "SP", row.notes)
+
+        self._dq_override_lbl.value_label.setText(str(len(override_events)))
+
+        if len(override_events) == 0 and completeness >= 90:
+            quality = "Good"
+        elif len(override_events) <= 5 and completeness >= 75:
+            quality = "Watch"
+        else:
+            quality = "At Risk"
+        self._dq_status_lbl.value_label.setText(quality)
+
+        # Weekly trend aggregates
+        daily_by_date: dict = defaultdict(lambda: {"filled": 0, "total": 0})
+        for row in daily_rows:
+            d = row.reading_date
+            for field in core_fields:
+                daily_by_date[d]["total"] += 1
+                if getattr(row, field, None) is not None:
+                    daily_by_date[d]["filled"] += 1
+
+        weekly_completeness: dict = defaultdict(lambda: {"filled": 0, "total": 0})
+        for d, counts in daily_by_date.items():
+            y, w, _ = d.isocalendar()
+            weekly_completeness[(y, w)]["filled"] += counts["filled"]
+            weekly_completeness[(y, w)]["total"] += counts["total"]
+
+        weekly_override_counts: dict = defaultdict(int)
+        for evt in override_events:
+            d = evt[0]
+            y, w, _ = d.isocalendar()
+            weekly_override_counts[(y, w)] += 1
+
+        self._render_data_quality_trends(weekly_completeness, weekly_override_counts)
+
+        override_events.sort(key=lambda x: x[0], reverse=True)
+        show = override_events[:25]
+        self._dq_table.setRowCount(len(show))
+        for row_i, item in enumerate(show):
+            row_data = (str(item[0]), item[1], item[2], item[3], item[4])
+            for col_i, text in enumerate(row_data):
+                cell = QTableWidgetItem(text)
+                cell.setTextAlignment(Qt.AlignCenter if col_i < 4 else Qt.AlignLeft | Qt.AlignVCenter)
+                if col_i == 3:
+                    color = "#c0392b" if text == "Critical" else "#d68910"
+                    cell.setForeground(QBrush(QColor(color)))
+                    f = cell.font()
+                    f.setBold(True)
+                    cell.setFont(f)
+                self._dq_table.setItem(row_i, col_i, cell)
+            self._dq_table.setRowHeight(row_i, 30)
+
+    def _render_data_quality_trends(self, weekly_completeness: dict, weekly_overrides: dict):
+        """Render weekly trend charts for completeness percent and override counts."""
+        keys = sorted(set(weekly_completeness.keys()) | set(weekly_overrides.keys()))
+
+        comp_chart = _make_chart("Weekly Daily-Log Completeness (%)")
+        ov_chart = _make_chart("Weekly QA Overrides (count)")
+
+        if not keys:
+            comp_chart.setTitle("Weekly Daily-Log Completeness (%) — no data")
+            ov_chart.setTitle("Weekly QA Overrides (count) — no data")
+            self._dq_completeness_view.setChart(comp_chart)
+            self._dq_override_view.setChart(ov_chart)
+            return
+
+        comp_series = QLineSeries()
+        comp_series.setName("Completeness %")
+        comp_series.setColor(QColor("#1e8449"))
+
+        ov_series = QLineSeries()
+        ov_series.setName("Override count")
+        ov_series.setColor(QColor("#d68910"))
+
+        max_overrides = 0
+        for y, w in keys:
+            week_dt = datetime.fromisocalendar(y, w, 1)
+            x = _date_to_ms(week_dt)
+
+            c = weekly_completeness.get((y, w), {"filled": 0, "total": 0})
+            pct = 100.0 if c["total"] == 0 else (c["filled"] / c["total"]) * 100.0
+            comp_series.append(x, pct)
+
+            ov = weekly_overrides.get((y, w), 0)
+            ov_series.append(x, ov)
+            max_overrides = max(max_overrides, ov)
+
+        comp_chart.addSeries(comp_series)
+        comp_x = QDateTimeAxis()
+        comp_x.setFormat("dd MMM")
+        _style_axis(comp_x, "Week")
+        comp_chart.addAxis(comp_x, Qt.AlignmentFlag.AlignBottom)
+        comp_y = QValueAxis()
+        comp_y.setRange(0, 100)
+        _style_axis(comp_y, "Completeness (%)")
+        comp_chart.addAxis(comp_y, Qt.AlignmentFlag.AlignLeft)
+        _attach_axes(comp_chart, comp_x, comp_y)
+
+        ov_chart.addSeries(ov_series)
+        ov_x = QDateTimeAxis()
+        ov_x.setFormat("dd MMM")
+        _style_axis(ov_x, "Week")
+        ov_chart.addAxis(ov_x, Qt.AlignmentFlag.AlignBottom)
+        ov_y = QValueAxis()
+        ov_y.setRange(0, max(3, max_overrides + 1))
+        _style_axis(ov_y, "Overrides")
+        ov_chart.addAxis(ov_y, Qt.AlignmentFlag.AlignLeft)
+        _attach_axes(ov_chart, ov_x, ov_y)
+
+        self._dq_completeness_view.setChart(comp_chart)
+        self._dq_override_view.setChart(ov_chart)
+
     # ── Refresh entry point ────────────────────────────────────────────────────
 
     def refresh(self):
-        """Reload all data and rebuild all four charts."""
+        """Reload all data and rebuild all dashboard surfaces."""
         self._populate_cec_dropdowns()
         self._refresh_lab_daspoort()
         self._refresh_model_vs_actual()
         self._refresh_cec_trends()
         self._refresh_param_trends()
+        self._refresh_data_quality()
 
     def _populate_cec_dropdowns(self):
         """
@@ -710,6 +986,8 @@ class DashboardScreen(QWidget):
             "02_model_vs_actual":  self._mv_view,
             "03_cec_trends":       self._ct_view,
             "04_parameter_trends": self._pt_view,
+            "05_quality_completeness": self._dq_completeness_view,
+            "06_quality_overrides": self._dq_override_view,
         }
 
         saved = []

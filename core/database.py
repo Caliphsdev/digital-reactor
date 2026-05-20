@@ -28,7 +28,12 @@ engine = create_engine(DB_URL, echo=False, connect_args={"check_same_thread": Fa
 
 # ── Session factory ───────────────────────────────────────────────────────────
 # Call get_session() wherever you need database access.
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+SessionLocal = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    autocommit=False,
+    expire_on_commit=False,
+)
 
 
 def init_db() -> None:
@@ -53,6 +58,18 @@ def init_db() -> None:
     # Step 3: apply incremental schema upgrades to existing tables
     from core.migrations import run_migrations
     run_migrations(engine)
+
+    # Step 4: seed/update built-in real-plant Scientific Twin profiles
+    from core.plant_catalog import seed_default_plants
+    session = SessionLocal()
+    try:
+        seed_default_plants(session)
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
     print(f"[Database] Ready — {DB_PATH}")
 

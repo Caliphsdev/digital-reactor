@@ -421,33 +421,42 @@ def main() -> None:
     from ui.experiments import ExperimentsScreen
     experiments = ExperimentsScreen()
     experiments.experiment_changed.connect(home._refresh_status)
+    experiments.experiment_changed.connect(window.refresh_active_experiment)
     window.replace_screen(1, experiments)
 
     # ── Data-entry screens (Daily Log / CEC / Mass Balance) ───────────────────
     _set_progress(splash, base_pix, 62, "Loading data entry screens…")
     app.processEvents()
     from ui.data_entry import DataEntryScreen
-    window.replace_screen(2, DataEntryScreen())
+    data_entry = DataEntryScreen()
+    window.replace_screen(2, data_entry)
     from ui.cec_tracker import CECTrackerScreen
-    window.replace_screen(3, CECTrackerScreen())
+    cec_tracker = CECTrackerScreen()
+    window.replace_screen(3, cec_tracker)
     from ui.mass_balance import MassBalanceScreen
-    window.replace_screen(4, MassBalanceScreen())
+    mass_balance = MassBalanceScreen()
+    window.replace_screen(4, mass_balance)
 
-    # ── Simulation & Comparison ───────────────────────────────────────────────
-    _set_progress(splash, base_pix, 76, "Loading Simulation & Dashboard…")
+    # ── Simulation, Plants & Comparison ───────────────────────────────────────
+    _set_progress(splash, base_pix, 76, "Loading Simulation & Plants…")
     app.processEvents()
     from ui.simulation_screen import SimulationScreen
     window.replace_screen(5, SimulationScreen())
+    from ui.plants_screen import PlantsScreen
+    window.replace_screen(6, PlantsScreen())
+
+    _set_progress(splash, base_pix, 84, "Loading Comparison Dashboard…")
+    app.processEvents()
     from ui.dashboard import DashboardScreen
-    window.replace_screen(6, DashboardScreen())
+    window.replace_screen(7, DashboardScreen())
 
     # ── Settings & Manual ─────────────────────────────────────────────────────
     _set_progress(splash, base_pix, 91, "Loading Settings & Manual…")
     app.processEvents()
     from ui.settings import SettingsScreen
-    window.replace_screen(7, SettingsScreen())
+    window.replace_screen(8, SettingsScreen())
     from ui.help_screen import HelpScreen
-    window.replace_screen(8, HelpScreen())
+    window.replace_screen(9, HelpScreen())
 
     # ── Ready ─────────────────────────────────────────────────────────────────
     _set_progress(splash, base_pix, 100, "Ready.")

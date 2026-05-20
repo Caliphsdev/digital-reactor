@@ -27,7 +27,9 @@ from sklearn.metrics import r2_score
 from core.models import DailyReading, FlowReading, CECReading
 from core.calculations import calc_actual_srt, calc_removal_pct
 from core.paths import MODELS_DIR
-from simulation.generic_model import SimInputs, SimOutputs, run_phase1, REACTOR_VOLUME_L
+from simulation.generic_model import (
+    SimInputs, SimOutputs, run_phase1, REACTOR_VOLUME_L, AERATION_VOLUME_L,
+)
 
 # ── Thresholds ─────────────────────────────────────────────────────────────────
 MAIN_MODEL_THRESHOLD = 50   # complete daily rows needed to train the main model
@@ -236,16 +238,18 @@ def get_model_status() -> dict:
     Always returns a dict with all expected keys — never raises.
     """
     defaults = {
-        "main_trained":   False,
-        "pfas_trained":   False,
-        "n_samples_main": 0,
-        "n_samples_pfas": 0,
-        "last_trained":   None,
-        "r2_cod":         None,
-        "r2_nh4":         None,
-        "r2_tp":          None,
-        "r2_pfas":        None,
-        "cv_r2_mean":     None,
+        "main_trained":        False,
+        "pfas_trained":        False,
+        "n_samples_main":      0,
+        "n_samples_pfas":      0,
+        "last_trained":        None,
+        "r2_cod":              None,
+        "r2_nh4":              None,
+        "r2_tp":               None,
+        "r2_pfas":             None,
+        "cv_r2_mean":          None,
+        "feature_importances": None,
+        "pfas_importances":    None,
     }
     if not METADATA_PATH.exists():
         return defaults
@@ -276,18 +280,20 @@ def train_phase2(session) -> dict:
       last_trained    ISO datetime string
     """
     result = {
-        "status":         "ok",
-        "message":        "",
-        "n_samples_main": 0,
-        "n_samples_pfas": 0,
-        "main_trained":   False,
-        "pfas_trained":   False,
-        "r2_cod":         None,
-        "r2_nh4":         None,
-        "r2_tp":          None,
-        "r2_pfas":        None,
-        "cv_r2_mean":     None,
-        "last_trained":   datetime.utcnow().isoformat(),
+        "status":              "ok",
+        "message":             "",
+        "n_samples_main":      0,
+        "n_samples_pfas":      0,
+        "main_trained":        False,
+        "pfas_trained":        False,
+        "r2_cod":              None,
+        "r2_nh4":              None,
+        "r2_tp":               None,
+        "r2_pfas":             None,
+        "cv_r2_mean":          None,
+        "feature_importances": None,   # {"cod": {feat: imp, ...}, "nh4": ..., "tp": ...}
+        "pfas_importances":    None,   # {feat: imp, ...}
+        "last_trained":        datetime.utcnow().isoformat(),
     }
 
     try:
@@ -304,6 +310,8 @@ def train_phase2(session) -> dict:
                 f"have {len(df)}."
             )
             return result
+
+        MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
         # ── Main model (COD / NH4 / TP) ────────────────────────────────────────
         X = df[MAIN_FEATURE_COLS].values
@@ -334,7 +342,14 @@ def train_phase2(session) -> dict:
         result["r2_nh4"] = float(r2_score(y[:, 1], y_pred[:, 1]))
         result["r2_tp"]  = float(r2_score(y[:, 2], y_pred[:, 2]))
 
-        MODELS_DIR.mkdir(parents=True, exist_ok=True)
+        # ── Feature importances (per target) ─────────────────────────────────────
+        multi_rf = main_model.named_steps["rf"]
+        importances = {}
+        for target, estimator in zip(["cod", "nh4", "tp"], multi_rf.estimators_):
+            importances[target] = dict(
+                zip(MAIN_FEATURE_COLS, [round(v, 6) for v in estimator.feature_importances_])
+            )
+        result["feature_importances"] = importances
         joblib.dump(main_model, MAIN_MODEL_PATH)
         result["main_trained"] = True
 
@@ -353,6 +368,13 @@ def train_phase2(session) -> dict:
             ])
             pfas_model.fit(X_p, y_p)
             result["r2_pfas"] = float(r2_score(y_p, pfas_model.predict(X_p)))
+
+            # Feature importances for PFAS model
+            result["pfas_importances"] = dict(
+                zip(PFAS_FEATURE_COLS,
+                    [round(v, 6) for v in pfas_model.named_steps["rf"].feature_importances_])
+            )
+
             joblib.dump(pfas_model, PFAS_MODEL_PATH)
             result["pfas_trained"] = True
 
@@ -412,14 +434,14 @@ def run_phase2(inputs: SimInputs) -> SimOutputs:
 
     mlvss    = inputs.mlss_mgl * 0.80
     cod_load = inputs.inf_cod * q_l_per_day
-    biomass  = mlvss * REACTOR_VOLUME_L
+    biomass  = mlvss * AERATION_VOLUME_L
     fm_ratio = cod_load / biomass if biomass > 0 else 0.0
 
     nitrifier_min_srt = (3.0 * (1.123 ** (15.0 - inputs.temp_c))
                          if inputs.temp_c < 15 else 5.0)
 
-    from simulation.generic_model import KD_LONG_CHAIN, KD_SHORT_CHAIN
-    kd = KD_LONG_CHAIN if inputs.pfas_type == "long-chain" else KD_SHORT_CHAIN
+    from simulation.generic_model import get_kd
+    kd = get_kd(inputs.pfas_compound, inputs.pfas_type)
 
     # ── Main model (COD / NH4 / TP) ───────────────────────────────────────────
     main_model = _load_main_model()
@@ -440,11 +462,34 @@ def run_phase2(inputs: SimInputs) -> SimOutputs:
         cod_removal_pct = float(np.clip(pred[0], 0.0, 100.0))
         nh4_removal_pct = float(np.clip(pred[1], 0.0, 100.0))
         tp_removal_pct  = float(np.clip(pred[2], 0.0, 100.0))
+
+        # ── 90% prediction intervals from RF tree variance ────────────────────
+        # Each estimator in MultiOutputRegressor is a separate RF (one per target).
+        # We collect per-tree predictions to get the 5th/95th percentile interval.
+        try:
+            scaler   = main_model.named_steps["scaler"]
+            multi_rf = main_model.named_steps["rf"]
+            X_scaled = scaler.transform(X)
+            cod_ci = nh4_ci = tp_ci = None
+            for i, (target_ci_name, estimator) in enumerate(
+                zip(["cod", "nh4", "tp"], multi_rf.estimators_)
+            ):
+                tree_preds = np.array(
+                    [tree.predict(X_scaled)[0] for tree in estimator.estimators_]
+                )
+                low  = float(np.clip(np.percentile(tree_preds,  5), 0.0, 100.0))
+                high = float(np.clip(np.percentile(tree_preds, 95), 0.0, 100.0))
+                if i == 0:   cod_ci = (low, high)
+                elif i == 1: nh4_ci = (low, high)
+                else:        tp_ci  = (low, high)
+        except Exception:
+            cod_ci = nh4_ci = tp_ci = None
     else:
         p1 = run_phase1(inputs)
         cod_removal_pct = p1.cod_removal_pct
         nh4_removal_pct = p1.nh4_removal_pct
         tp_removal_pct  = p1.tp_removal_pct
+        cod_ci = nh4_ci = tp_ci = None
         warnings_out.append(
             "Phase 2 main model not trained — COD/NH₄/TP from Phase 1 equations."
         )
@@ -464,14 +509,27 @@ def run_phase2(inputs: SimInputs) -> SimOutputs:
             1 if inputs.pfas_type == "long-chain" else 0,
         ]])
         pfas_removal_pct = float(np.clip(pfas_model.predict(X_p)[0], 0.0, 100.0))
+        # ── PFAS 90% prediction interval ─────────────────────────────────────
+        try:
+            X_p_scaled      = pfas_model.named_steps["scaler"].transform(X_p)
+            pfas_rf         = pfas_model.named_steps["rf"]
+            pfas_tree_preds = np.array(
+                [tree.predict(X_p_scaled)[0] for tree in pfas_rf.estimators_]
+            )
+            pfas_ci = (
+                float(np.clip(np.percentile(pfas_tree_preds,  5), 0.0, 100.0)),
+                float(np.clip(np.percentile(pfas_tree_preds, 95), 0.0, 100.0)),
+            )
+        except Exception:
+            pfas_ci = None
     else:
         p1 = run_phase1(inputs)
         pfas_removal_pct = p1.pfas_removal_pct
+        pfas_ci = None
         warnings_out.append(
             "Phase 2 PFAS model not trained — PFAS prediction from Phase 1 equations."
         )
 
-    # ── Effluent concentrations ────────────────────────────────────────────────
     eff_cod  = max(0.0, inputs.inf_cod  * (1.0 - cod_removal_pct  / 100.0))
     eff_nh4  = max(0.0, inputs.inf_nh4  * (1.0 - nh4_removal_pct  / 100.0))
     eff_tp   = max(0.0, inputs.inf_tp   * (1.0 - tp_removal_pct   / 100.0))
@@ -495,4 +553,8 @@ def run_phase2(inputs: SimInputs) -> SimOutputs:
         nitrifier_min_srt = nitrifier_min_srt,
         alk_consumed_mgl  = alk_consumed_mgl,
         warnings          = warnings_out,
+        cod_ci            = cod_ci,
+        nh4_ci            = nh4_ci,
+        tp_ci             = tp_ci,
+        pfas_ci           = pfas_ci,
     )

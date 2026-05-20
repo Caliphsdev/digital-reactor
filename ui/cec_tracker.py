@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
     QLabel, QDoubleSpinBox, QLineEdit, QComboBox, QCheckBox,
     QPushButton, QDateEdit, QFrame, QScrollArea, QSplitter,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QSizePolicy, QMessageBox,
+    QSizePolicy, QMessageBox, QInputDialog,
 )
 from PySide6.QtCore import Qt, QDate, QSize
 from PySide6.QtGui import QFont, QColor, QBrush
@@ -41,6 +41,7 @@ from PySide6.QtCharts import (
 
 from core.database import get_session
 from core.models import Experiment, CECReading
+from core.validators import validate_cec_payload, summarize_issues
 from ui.theme import dark_date_edit_style
 
 
@@ -68,6 +69,10 @@ class CECTrackerScreen(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+
+        self._dirty = False
+        self._loading_form = False
+        self._loaded_date = QDate.currentDate()
 
         # sp_key → {spin, bdl_check, det_spin}
         self._sp_widgets: dict[str, dict] = {}
@@ -114,6 +119,7 @@ class CECTrackerScreen(QWidget):
         scroll.setFrameShape(QFrame.NoFrame)
 
         root.addWidget(scroll, stretch=1)
+        self._wire_dirty_tracking()
 
     # ── Panel card wrapper ─────────────────────────────────────────────────────
     def _panel_card(self, title: str, widget: QWidget) -> QWidget:
@@ -163,6 +169,7 @@ class CECTrackerScreen(QWidget):
         self._date_edit.setFixedHeight(30)
         self._date_edit.setFixedWidth(130)
         self._date_edit.setStyleSheet(dark_date_edit_style())
+        self._date_edit.dateChanged.connect(self._on_date_changed_request)
         row.addWidget(self._date_edit)
 
         self._save_btn = QPushButton("  Save CEC Readings")
@@ -416,6 +423,17 @@ class CECTrackerScreen(QWidget):
         self._chart_view = view
         return view
 
+    def _wire_dirty_tracking(self) -> None:
+        """Connect all editable fields so we can warn before discarding unsaved values."""
+        self._cec_name.currentTextChanged.connect(self._mark_dirty)
+        self._cec_type.currentTextChanged.connect(self._mark_dirty)
+        self._method.currentTextChanged.connect(self._mark_dirty)
+        for sp_key, _, _ in SAMPLING_POINTS:
+            w = self._sp_widgets[sp_key]
+            w["spin"].valueChanged.connect(self._mark_dirty)
+            w["bdl"].toggled.connect(self._mark_dirty)
+            w["det"].valueChanged.connect(self._mark_dirty)
+
     # ── Save logic ─────────────────────────────────────────────────────────────
     def _on_save(self) -> None:
         """
@@ -437,6 +455,20 @@ class CECTrackerScreen(QWidget):
         reading_date = dt_date(qd.year(), qd.month(), qd.day())
         cec_type = self._cec_type.currentText() or None
         method   = self._method.currentText() or None
+
+        sampling_values: dict[str, dict[str, float | bool | None]] = {}
+        for sp_key, _, _ in SAMPLING_POINTS:
+            w = self._sp_widgets[sp_key]
+            sampling_values[sp_key] = {
+                "concentration": w["spin"].value(),
+                "below_detection": w["bdl"].isChecked(),
+                "detection_limit": w["det"].value(),
+            }
+
+        issues = validate_cec_payload(sampling_values)
+        ok_to_save, override_reason = self._confirm_validation_issues(issues)
+        if not ok_to_save:
+            return
 
         try:
             with get_session() as session:
@@ -472,6 +504,8 @@ class CECTrackerScreen(QWidget):
                     row.below_detection = bdl
                     row.detection_limit = det
                     row.analysis_method = method
+                    if override_reason:
+                        row.notes = self._append_override_note(row.notes, override_reason, issues)
 
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", f"Could not save:\n\n{exc}")
@@ -479,8 +513,34 @@ class CECTrackerScreen(QWidget):
 
         self._save_msg.setText("  Saved successfully.")
         self._save_msg.setStyleSheet("font-size:11px; color:#27ae60;")
+        self._set_dirty(False)
+        self._loaded_date = self._date_edit.date()
         self._refresh_history()
         self._update_results_from_form()
+
+    # ── Date changes ──────────────────────────────────────────────────────────
+    def _on_date_changed_request(self, qdate: QDate) -> None:
+        """Prompt before changing dates when the CEC form has unsaved edits."""
+        if self._loading_form:
+            return
+        if self._dirty:
+            keep = QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                "You have unsaved CEC readings. Discard these changes and use a new date?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if keep != QMessageBox.Yes:
+                self._loading_form = True
+                self._date_edit.blockSignals(True)
+                self._date_edit.setDate(self._loaded_date)
+                self._date_edit.blockSignals(False)
+                self._loading_form = False
+                return
+        self._loaded_date = qdate
+        self._set_dirty(False)
+        self._save_msg.setText("")
 
     # ── Results update ─────────────────────────────────────────────────────────
     def _update_results_from_form(self) -> None:
@@ -703,12 +763,89 @@ class CECTrackerScreen(QWidget):
         self._info_label.setStyleSheet("color:#e74c3c; font-size:11px;")
         return None
 
+    def _mark_dirty(self, *_args) -> None:
+        if not self._loading_form:
+            self._set_dirty(True)
+
+    def _confirm_validation_issues(
+        self, issues: list
+    ) -> tuple[bool, str | None]:
+        """Ask user to confirm and document QA override when issues are present."""
+        if not issues:
+            return True, None
+
+        errors = [issue for issue in issues if issue.severity == "error"]
+        if errors:
+            QMessageBox.warning(
+                self,
+                "Validation Errors",
+                "These CEC readings cannot be saved until the following errors are fixed:\n\n"
+                f"{summarize_issues(errors)}",
+            )
+            return False, None
+
+        summary = summarize_issues(issues)
+        proceed = QMessageBox.warning(
+            self,
+            "Validation Checks",
+            "CEC validation detected warnings:\n\n"
+            f"{summary}\n\n"
+            "Do you want to save anyway with a documented QA override reason?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if proceed != QMessageBox.Yes:
+            return False, None
+
+        reason, ok = QInputDialog.getText(
+            self,
+            "QA Override Reason",
+            "Enter reason for overriding validation checks:",
+        )
+        if not ok or not reason.strip():
+            QMessageBox.information(
+                self,
+                "Save Cancelled",
+                "A non-empty override reason is required to proceed.",
+            )
+            return False, None
+        return True, reason.strip()
+
+    @staticmethod
+    def _append_override_note(existing: str | None, reason: str, issues: list) -> str:
+        """Append a timestamped QA override audit entry to per-reading notes."""
+        from datetime import datetime
+
+        stamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        issue_txt = "; ".join([i.message for i in issues[:4]])
+        line = f"[QA Override {stamp}] Reason: {reason}. Checks: {issue_txt}"
+        if existing and existing.strip():
+            return existing.strip() + "\n" + line
+        return line
+
+    def _set_dirty(self, dirty: bool) -> None:
+        self._dirty = dirty
+
+    def confirm_discard_changes(self) -> bool:
+        """Return False when the user cancels navigation with unsaved edits."""
+        if not self._dirty:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Unsaved Changes",
+            "You have unsaved CEC readings. Leave this screen and discard changes?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
+
     # ── Lifecycle ──────────────────────────────────────────────────────────────
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._save_msg.setText("")
         self._get_active_experiment()
         self._refresh_history()
+        self._set_dirty(False)
 
     # ── Style helpers ──────────────────────────────────────────────────────────
     @staticmethod

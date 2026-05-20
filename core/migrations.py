@@ -28,7 +28,7 @@ from sqlalchemy import text
 
 
 # ── Version tracking ──────────────────────────────────────────────────────────
-CURRENT_SCHEMA_VERSION = 2   # increment each time a migration is added
+CURRENT_SCHEMA_VERSION = 4   # increment each time a migration is added
 
 
 # ── Individual migration functions ────────────────────────────────────────────
@@ -95,12 +95,143 @@ def migration_002_add_sludge_characterization(conn) -> None:
     """))
 
 
+def migration_003_add_real_plant_twins(conn) -> None:
+    """
+    v3 — Add real-plant Scientific Twin tables.
+
+    These tables are intentionally separate from the lab-reactor experiment
+    tables so Daspoort, Zeekoegat, and Phola can be modelled without changing
+    existing lab workflows.
+    """
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS plants (
+            id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+            slug                     TEXT NOT NULL UNIQUE,
+            name                     TEXT NOT NULL,
+            municipality             TEXT,
+            province                 TEXT,
+            process_family           TEXT NOT NULL,
+            capacity_mld             REAL,
+            receiving_water          TEXT,
+            summary                  TEXT,
+            realism_notes            TEXT,
+            source_notes             TEXT,
+            default_flow_mld         REAL,
+            default_hrt_hours        REAL,
+            default_srt_days         REAL,
+            default_mlss_mgl         REAL,
+            default_do_mgl           REAL,
+            default_temp_c           REAL,
+            default_ph               REAL,
+            default_recycle_ratio    REAL,
+            default_organic_loading  REAL,
+            default_nitrogen_loading REAL,
+            created_at               DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+
+
+def migration_004_add_plant_calibration(conn) -> None:
+    """
+    v4 — Add Daspoort monitoring calibration support.
+
+    Adds operational fields to plant_monitoring_readings and creates
+    plant_calibrations for target-wise model multipliers.
+    """
+    new_columns = [
+        ("do_mgl", "REAL"),
+        ("mlss_mgl", "REAL"),
+        ("srt_days", "REAL"),
+        ("hrt_hours", "REAL"),
+        ("recycle_ratio", "REAL"),
+    ]
+    for col_name, col_type in new_columns:
+        try:
+            conn.execute(
+                text(f"ALTER TABLE plant_monitoring_readings ADD COLUMN {col_name} {col_type}")
+            )
+        except Exception:
+            pass
+
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS plant_calibrations (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            plant_id           INTEGER NOT NULL REFERENCES plants(id) ON DELETE CASCADE,
+            target             TEXT NOT NULL,
+            multiplier         REAL NOT NULL DEFAULT 1.0,
+            n_samples          INTEGER NOT NULL DEFAULT 0,
+            rmse_pct           REAL,
+            mean_abs_error_pct REAL,
+            r2                 REAL,
+            actual_mean_pct    REAL,
+            predicted_mean_pct REAL,
+            date_start         DATE,
+            date_end           DATE,
+            method             TEXT,
+            notes              TEXT,
+            calibrated_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS plant_units (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            plant_id       INTEGER NOT NULL REFERENCES plants(id) ON DELETE CASCADE,
+            unit_order     INTEGER NOT NULL,
+            name           TEXT NOT NULL,
+            unit_type      TEXT NOT NULL,
+            hydraulic_role TEXT,
+            hrt_hours      REAL,
+            notes          TEXT
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS plant_sampling_points (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            plant_id         INTEGER NOT NULL REFERENCES plants(id) ON DELETE CASCADE,
+            point_order      INTEGER NOT NULL,
+            code             TEXT NOT NULL,
+            name             TEXT NOT NULL,
+            after_unit_order INTEGER,
+            description      TEXT
+        )
+    """))
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS plant_monitoring_readings (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            plant_id            INTEGER NOT NULL REFERENCES plants(id) ON DELETE CASCADE,
+            sampling_point_id   INTEGER REFERENCES plant_sampling_points(id),
+            sampling_date       DATE NOT NULL,
+            sampling_point_code TEXT,
+            cec_name            TEXT,
+            cec_type            TEXT,
+            concentration_ugl   REAL,
+            below_detection     BOOLEAN DEFAULT 0,
+            detection_limit_ugl REAL,
+            cod_mgl             REAL,
+            bod_mgl             REAL,
+            nh4_mgl             REAL,
+            no3_mgl             REAL,
+            tn_mgl              REAL,
+            tp_mgl              REAL,
+            tss_mgl             REAL,
+            ph                  REAL,
+            temperature_c       REAL,
+            flow_mld            REAL,
+            source              TEXT,
+            notes               TEXT,
+            created_at          DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """))
+
+
 # ── Migration registry ─────────────────────────────────────────────────────────
 # Each entry: (version_number, migration_function)
 # APPEND ONLY — never remove or reorder existing entries.
 MIGRATIONS: list[tuple[int, object]] = [
     (1, migration_001_add_advanced_daily_params),
     (2, migration_002_add_sludge_characterization),
+    (3, migration_003_add_real_plant_twins),
+    (4, migration_004_add_plant_calibration),
 ]
 
 

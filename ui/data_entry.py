@@ -25,13 +25,14 @@ from PySide6.QtWidgets import (
     QLabel, QDoubleSpinBox, QTextEdit, QLineEdit,
     QPushButton, QDateEdit, QTabWidget, QTableWidget, QTableWidgetItem,
     QHeaderView, QFrame, QSizePolicy, QScrollArea, QAbstractItemView,
-    QMessageBox,
+    QMessageBox, QInputDialog,
 )
 from PySide6.QtCore import Qt, QDate, QSize
 from PySide6.QtGui import QFont, QColor, QBrush
 
 from core.database import get_session
 from core.models import Experiment, DailyReading, FlowReading
+from core.validators import validate_daily_payload, summarize_issues
 from ui.theme import dark_date_edit_style
 
 
@@ -174,6 +175,10 @@ class DataEntryScreen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        self._dirty = False
+        self._loading_form = False
+        self._loaded_date = QDate.currentDate()
+
         # zone → field → QDoubleSpinBox  (core measurements)
         self._zone_spins: dict[str, dict[str, QDoubleSpinBox]] = {}
         # zone → field → QDoubleSpinBox  (advanced measurements)
@@ -209,6 +214,8 @@ class DataEntryScreen(QWidget):
         scroll.setWidget(form_body)
         root.addWidget(scroll, stretch=1)
 
+        self._wire_dirty_tracking()
+
     # ── Header ─────────────────────────────────────────────────────────────────
     def _build_header(self) -> QWidget:
         bar = QWidget()
@@ -237,7 +244,7 @@ class DataEntryScreen(QWidget):
         self._date_edit.setFixedHeight(30)
         self._date_edit.setFixedWidth(130)
         self._date_edit.setStyleSheet(dark_date_edit_style())
-        self._date_edit.dateChanged.connect(self._on_date_changed)
+        self._date_edit.dateChanged.connect(self._on_date_changed_request)
         row.addWidget(self._date_edit)
 
         # Save button
@@ -330,6 +337,21 @@ class DataEntryScreen(QWidget):
 
         card_layout.addWidget(self._tabs)
         return card
+
+    def _wire_dirty_tracking(self) -> None:
+        """Connect user-editable widgets to a shared dirty-state marker."""
+        for zone in ZONES:
+            for field, *_ in ZONE_FIELDS:
+                self._zone_spins[zone][field].valueChanged.connect(self._mark_dirty)
+            for field, *_ in ADVANCED_ZONE_FIELDS:
+                spin = self._adv_zone_spins.get(zone, {}).get(field)
+                if spin:
+                    spin.valueChanged.connect(self._mark_dirty)
+            self._zone_notes[zone].textChanged.connect(self._mark_dirty)
+
+        for spin in self._flow_spins.values():
+            spin.valueChanged.connect(self._mark_dirty)
+        self._flow_notes.textChanged.connect(self._mark_dirty)
 
     def _build_zone_tab(self, zone: str) -> QWidget:
         """
@@ -642,6 +664,35 @@ class DataEntryScreen(QWidget):
         qd = self._date_edit.date()
         reading_date = dt_date(qd.year(), qd.month(), qd.day())
 
+        zone_payload: dict[str, dict[str, float | None]] = {}
+        for zone in ZONES:
+            values = {}
+            for field, *_ in ZONE_FIELDS:
+                spin = self._zone_spins[zone][field]
+                values[field] = spin.value() if spin.value() > spin.minimum() else None
+            zone_payload[zone] = values
+
+        flow_payload = {
+            "q_in_mlh": self._flow_spins["q_in_mlh"].value(),
+            "q_was_mlh": self._flow_spins["q_was_mlh"].value(),
+            "q_psludge_mlh": self._flow_spins["q_psludge_mlh"].value(),
+            "ras_ratio": self._flow_spins["ras_ratio"].value(),
+        }
+
+        issues = validate_daily_payload(zone_payload, flow_payload)
+        ok_to_save, override_reason = self._confirm_validation_issues(issues)
+        if not ok_to_save:
+            return
+
+        zone_issue_map: dict[str, list[str]] = {}
+        flow_issue_msgs: list[str] = []
+        for issue in issues:
+            if issue.scope.startswith("zone:"):
+                z = issue.scope.split(":", 1)[1]
+                zone_issue_map.setdefault(z, []).append(issue.message)
+            elif issue.scope == "flow":
+                flow_issue_msgs.append(issue.message)
+
         try:
             with get_session() as session:
                 # ── Zone readings ──────────────────────────────────────────────
@@ -688,6 +739,13 @@ class DataEntryScreen(QWidget):
                     row.mlss_mgl      = values["mlss_mgl"]
                     row.notes         = notes
 
+                    if override_reason and zone in zone_issue_map:
+                        row.notes = self._append_override_note(
+                            row.notes,
+                            override_reason,
+                            zone_issue_map[zone],
+                        )
+
                     # Advanced parameters (save only if the user opened the section)
                     adv_spins = self._adv_zone_spins.get(zone, {})
                     for field, *_ in ADVANCED_ZONE_FIELDS:
@@ -717,6 +775,12 @@ class DataEntryScreen(QWidget):
                 flow.q_psludge_mlh = self._flow_spins["q_psludge_mlh"].value()
                 flow.ras_ratio     = self._flow_spins["ras_ratio"].value()
                 flow.notes         = self._flow_notes.toPlainText().strip() or None
+                if override_reason and flow_issue_msgs:
+                    flow.notes = self._append_override_note(
+                        flow.notes,
+                        override_reason,
+                        flow_issue_msgs,
+                    )
 
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", f"Could not save readings:\n\n{exc}")
@@ -724,9 +788,32 @@ class DataEntryScreen(QWidget):
 
         self._save_msg.setText("  Saved successfully.")
         self._save_msg.setStyleSheet("font-size: 11px; color: #27ae60;")
+        self._set_dirty(False)
+        self._loaded_date = self._date_edit.date()
         self._refresh_history()
 
     # ── Date change — pre-fill form with existing data ────────────────────────
+    def _on_date_changed_request(self, qdate: QDate) -> None:
+        """Prompt before discarding unsaved edits when the user changes date."""
+        if self._loading_form:
+            return
+        if self._dirty:
+            keep = QMessageBox.question(
+                self,
+                "Unsaved Changes",
+                "You have unsaved daily readings. Discard these changes and load a new date?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if keep != QMessageBox.Yes:
+                self._loading_form = True
+                self._date_edit.blockSignals(True)
+                self._date_edit.setDate(self._loaded_date)
+                self._date_edit.blockSignals(False)
+                self._loading_form = False
+                return
+        self._on_date_changed(qdate)
+
     def _on_date_changed(self, qdate: QDate) -> None:
         """When the user picks a different date, load existing readings into the form."""
         self._save_msg.setText("")
@@ -735,6 +822,7 @@ class DataEntryScreen(QWidget):
             return
 
         reading_date = dt_date(qdate.year(), qdate.month(), qdate.day())
+        self._loading_form = True
 
         try:
             with get_session() as session:
@@ -784,9 +872,13 @@ class DataEntryScreen(QWidget):
                     val if val is not None else self._flow_spins[field].minimum()
                 )
             self._flow_notes.setPlainText(flow_row.notes or "" if flow_row else "")
+            self._loaded_date = qdate
+            self._set_dirty(False)
 
         except Exception:
             pass   # silently skip pre-fill errors
+        finally:
+            self._loading_form = False
 
     # ── History table ──────────────────────────────────────────────────────────
     def _refresh_history(self) -> None:
@@ -907,6 +999,82 @@ class DataEntryScreen(QWidget):
         self._info_label.setText("No active experiment — go to Experiments to set one.")
         self._info_label.setStyleSheet("color: #e74c3c; font-size: 11px;")
         return None
+
+    def _mark_dirty(self, *_args) -> None:
+        if not self._loading_form:
+            self._set_dirty(True)
+
+    def _confirm_validation_issues(
+        self, issues: list
+    ) -> tuple[bool, str | None]:
+        """Ask user to confirm and document QA override when issues are present."""
+        if not issues:
+            return True, None
+
+        errors = [issue for issue in issues if issue.severity == "error"]
+        if errors:
+            QMessageBox.warning(
+                self,
+                "Validation Errors",
+                "These readings cannot be saved until the following errors are fixed:\n\n"
+                f"{summarize_issues(errors)}",
+            )
+            return False, None
+
+        summary = summarize_issues(issues)
+        proceed = QMessageBox.warning(
+            self,
+            "Validation Checks",
+            "Scientific validation detected warnings:\n\n"
+            f"{summary}\n\n"
+            "Do you want to save anyway with a documented QA override reason?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if proceed != QMessageBox.Yes:
+            return False, None
+
+        reason, ok = QInputDialog.getText(
+            self,
+            "QA Override Reason",
+            "Enter reason for overriding validation checks:",
+        )
+        if not ok or not reason.strip():
+            QMessageBox.information(
+                self,
+                "Save Cancelled",
+                "A non-empty override reason is required to proceed.",
+            )
+            return False, None
+        return True, reason.strip()
+
+    @staticmethod
+    def _append_override_note(existing: str | None, reason: str, issues: list[str]) -> str:
+        """Append a timestamped QA override audit trail entry to notes fields."""
+        from datetime import datetime
+
+        stamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+        issues_txt = "; ".join(issues[:4])
+        line = f"[QA Override {stamp}] Reason: {reason}. Checks: {issues_txt}"
+        if existing and existing.strip():
+            return existing.strip() + "\n" + line
+        return line
+
+    def _set_dirty(self, dirty: bool) -> None:
+        self._dirty = dirty
+
+    def confirm_discard_changes(self) -> bool:
+        """Return False when the user cancels navigation with unsaved edits."""
+        if not self._dirty:
+            return True
+        answer = QMessageBox.question(
+            self,
+            "Unsaved Changes",
+            "You have unsaved daily readings. Leave this screen and discard changes?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
     def showEvent(self, event) -> None:
