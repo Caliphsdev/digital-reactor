@@ -71,10 +71,8 @@ def _global_qss() -> str:
     Applied once to QApplication — cascades to all widgets.
     Overrides can still be applied per-widget using setStyleSheet().
     """
-    import os
-    # Build absolute path so the image URL works regardless of launch directory
-    _icons = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
-    _check = os.path.join(_icons, "check_white.svg").replace("\\", "/")
+    from core.resources import resource_path
+    _check = resource_path("ui/icons/check_white.svg").replace("\\", "/")
     c = COLORS
     return f"""
     /* ── Global base ──────────────────────────────────────────────────── */

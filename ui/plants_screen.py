@@ -13,6 +13,8 @@ connected and calibration is performed.
 
 from __future__ import annotations
 
+import math
+
 import qtawesome as qta
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
@@ -20,8 +22,8 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QDoubleSpinBox, QComboBox, QScrollArea,
     QSizePolicy, QFileDialog, QMessageBox,
 )
-from PySide6.QtCore import Qt, QSize, QTimer, QThread, Signal
-from PySide6.QtGui import QFont, QColor, QBrush
+from PySide6.QtCore import Qt, QSize, QTimer, QThread, Signal, QRectF, QPointF
+from PySide6.QtGui import QFont, QColor, QBrush, QPainter, QPen, QPainterPath, QPolygonF
 
 from core.database import get_session
 from core.models import Plant, PlantMonitoringReading
@@ -43,6 +45,20 @@ C_CARD = "#ffffff"
 C_BORDER = "#dde1e7"
 C_TEXT = "#2c3e50"
 C_MUTED = "#636e72"
+
+
+def _unit_order(unit) -> int:
+    return int(getattr(unit, "unit_order", getattr(unit, "order", 0)) or 0)
+
+
+def _point_order(point) -> int:
+    return int(getattr(point, "point_order", getattr(point, "order", 0)) or 0)
+
+
+def _plant_attr(plant, key: str, fallback=""):
+    if isinstance(plant, dict):
+        return plant.get(key, fallback)
+    return getattr(plant, key, fallback)
 
 
 def _item(text: str, align=Qt.AlignCenter) -> QTableWidgetItem:
@@ -89,6 +105,1082 @@ class PlantCalibrationWorker(QThread):
             self.result_ready.emit({"status": "ok", "result": result})
         except Exception as exc:
             self.result_ready.emit({"status": "error", "message": str(exc)})
+
+
+class PlantProcessDiagram(QWidget):
+    """Read-only treatment-train visual generated from plant profile data."""
+
+    CATEGORY_STYLES = {
+        "preliminary": ("Preliminary", "#eaf2f8", "#2471a3"),
+        "primary": ("Primary", "#f4ecf7", "#8e44ad"),
+        "anaerobic": ("Anaerobic", "#fdf2e9", "#ca6f1e"),
+        "anoxic": ("Anoxic", "#e8f4fd", "#2874a6"),
+        "aerobic": ("Aerobic", "#e9f7ef", "#1e8449"),
+        "clarification": ("Clarification", "#f8f9fa", "#7f8c8d"),
+        "tertiary": ("Tertiary", "#edf7f2", "#138d75"),
+        "disinfection": ("Disinfection", "#fff7e6", "#d68910"),
+        "pond": ("Pond/wetland", "#e8f8f5", "#148f77"),
+        "biofilm": ("Biofilm", "#eef4ff", "#2e86de"),
+        "sludge": ("Sludge", "#fdecea", "#c0392b"),
+        "other": ("Process", "#f4f6f7", "#566573"),
+    }
+
+    TYPE_TO_CATEGORY = {
+        "screening": "preliminary",
+        "screening_grit": "preliminary",
+        "grit": "preliminary",
+        "balancing": "preliminary",
+        "primary_settling": "primary",
+        "anaerobic": "anaerobic",
+        "anoxic": "anoxic",
+        "aerobic": "aerobic",
+        "secondary_clarifier": "clarification",
+        "humus_tank": "clarification",
+        "tertiary_filtration": "tertiary",
+        "disinfection": "disinfection",
+        "anaerobic_pond": "pond",
+        "reed_bed": "pond",
+        "trickling_filter": "biofilm",
+        "sludge_handling": "sludge",
+        "sludge_drying": "sludge",
+    }
+
+    PLANT_NOTES = {
+        "daspoort": "Research layer: heritage trickling filters and reported anammox context are shown for scientific interpretation, not live control.",
+        "zeekoegat": "Mode-ready BNR profile: A2O/Bardenpho, UCT, Modified UCT, and Johannesburg configurations are represented in the model controls.",
+        "phola": "PETRO-style path: pond retention, fixed-film treatment, humus settling, disinfection, reed-bed polishing, and solids drying.",
+    }
+
+    def __init__(self, plant, units: list, sampling_points: list, parent=None):
+        super().__init__(parent)
+        self.plant = plant
+        self.units = sorted(units, key=_unit_order)
+        self.sampling_points = sorted(sampling_points, key=_point_order)
+        self.plant_slug = str(_plant_attr(plant, "slug", "") or "")
+        self.plant_name = str(_plant_attr(plant, "name", "Plant") or "Plant")
+        self.setMinimumHeight(320)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+        self.setAttribute(Qt.WA_OpaquePaintEvent, False)
+
+    def sizeHint(self) -> QSize:
+        return QSize(920, 340)
+
+    def resizeEvent(self, event) -> None:
+        metrics = self._layout_for_width(max(320, event.size().width()))
+        if self.minimumHeight() != metrics["required_height"]:
+            self.setMinimumHeight(metrics["required_height"])
+        super().resizeEvent(event)
+
+    def ordered_unit_names(self) -> list[str]:
+        return [getattr(unit, "name", "") for unit in self.units]
+
+    def ordered_sampling_codes(self) -> list[str]:
+        return [getattr(point, "code", "") for point in self.sampling_points]
+
+    @classmethod
+    def category_for_unit(cls, unit_type: str) -> str:
+        return cls.TYPE_TO_CATEGORY.get(unit_type, "other")
+
+    @classmethod
+    def category_label_for_unit(cls, unit_type: str) -> str:
+        category = cls.category_for_unit(unit_type)
+        return cls.CATEGORY_STYLES[category][0]
+
+    def _layout_for_width(self, width: int) -> dict:
+        usable = max(280, width - 32)
+        gap = 18
+        min_card = 138
+        max_card = 178
+        columns = max(1, min(len(self.units) or 1, int((usable + gap) / (min_card + gap))))
+        card_w = min(max_card, max(min_card, (usable - gap * (columns - 1)) / columns))
+        card_h = 78
+        row_gap = 76
+        rows = max(1, (len(self.units) + columns - 1) // columns)
+        top = 72
+        categories = []
+        for unit in self.units:
+            category = self.category_for_unit(getattr(unit, "unit_type", "other") or "other")
+            if category not in categories:
+                categories.append(category)
+        legend_lines = 1
+        legend_x = 0
+        for category in categories[:8]:
+            label = self.CATEGORY_STYLES[category][0]
+            chip_w = max(82, len(label) * 6 + 24) + 8
+            if legend_x and legend_x + chip_w > usable:
+                legend_lines += 1
+                legend_x = 0
+            legend_x += chip_w
+        note_height = 62 if self.plant_slug in self.PLANT_NOTES else 0
+        required = int(top + rows * card_h + (rows - 1) * row_gap + 48 + legend_lines * 24 + note_height + 24)
+        return {
+            "columns": columns,
+            "card_w": card_w,
+            "card_h": card_h,
+            "gap": gap,
+            "row_gap": row_gap,
+            "top": top,
+            "required_height": max(300, required),
+        }
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.fillRect(self.rect(), QColor("#ffffff"))
+
+        rect = self.rect().adjusted(16, 14, -16, -14)
+        metrics = self._layout_for_width(self.width())
+        self._draw_title(painter, rect)
+
+        unit_rects = self._draw_units(painter, rect, metrics)
+        self._draw_arrows(painter, unit_rects)
+        self._draw_sampling_points(painter, unit_rects)
+        self._draw_legend_and_note(painter, rect, unit_rects, metrics)
+
+    def _draw_title(self, painter: QPainter, rect) -> None:
+        painter.setPen(QColor(C_TEXT))
+        font = QFont()
+        font.setPointSize(11)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(QRectF(rect.left(), rect.top(), rect.width(), 22), Qt.AlignLeft | Qt.AlignVCenter, "Visual Process Screen")
+
+        painter.setPen(QColor(C_MUTED))
+        sub = QFont()
+        sub.setPointSize(8)
+        painter.setFont(sub)
+        process = str(_plant_attr(self.plant, "process_family", "") or "")
+        painter.drawText(
+            QRectF(rect.left(), rect.top() + 24, rect.width(), 18),
+            Qt.AlignLeft | Qt.AlignVCenter,
+            f"{self.plant_name} · {process}",
+        )
+
+    def _draw_units(self, painter: QPainter, rect, metrics: dict) -> dict[int, QRectF]:
+        unit_rects = {}
+        columns = metrics["columns"]
+        card_w = metrics["card_w"]
+        card_h = metrics["card_h"]
+        gap = metrics["gap"]
+        row_gap = metrics["row_gap"]
+        top = rect.top() + metrics["top"]
+
+        for index, unit in enumerate(self.units):
+            row = index // columns
+            col = index % columns
+            x = rect.left() + col * (card_w + gap)
+            y = top + row * (card_h + row_gap)
+            box = QRectF(x, y, card_w, card_h)
+            unit_rects[_unit_order(unit)] = box
+            self._draw_unit_box(painter, unit, box, index + 1)
+        return unit_rects
+
+    def _draw_unit_box(self, painter: QPainter, unit, box: QRectF, sequence: int) -> None:
+        unit_type = getattr(unit, "unit_type", "other") or "other"
+        category = self.category_for_unit(unit_type)
+        label, fill, border = self.CATEGORY_STYLES[category]
+
+        painter.setPen(QPen(QColor(border), 1.4))
+        painter.setBrush(QColor(fill))
+        painter.drawRoundedRect(box, 7, 7)
+
+        number_rect = QRectF(box.left() + 8, box.top() + 8, 24, 20)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(border))
+        painter.drawRoundedRect(number_rect, 5, 5)
+        painter.setPen(QColor("#ffffff"))
+        font = QFont()
+        font.setPointSize(8)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(number_rect, Qt.AlignCenter, str(sequence))
+
+        painter.setPen(QColor(border))
+        tag_font = QFont()
+        tag_font.setPointSize(7)
+        tag_font.setBold(True)
+        painter.setFont(tag_font)
+        painter.drawText(QRectF(box.left() + 38, box.top() + 8, box.width() - 46, 14), Qt.AlignLeft | Qt.AlignVCenter, label)
+
+        painter.setPen(QColor(C_TEXT))
+        name_font = QFont()
+        name_font.setPointSize(8)
+        name_font.setBold(True)
+        painter.setFont(name_font)
+        painter.drawText(
+            QRectF(box.left() + 8, box.top() + 28, box.width() - 16, 38),
+            Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap,
+            getattr(unit, "name", ""),
+        )
+
+    def _draw_arrows(self, painter: QPainter, unit_rects: dict[int, QRectF]) -> None:
+        if len(self.units) < 2:
+            return
+        pen = QPen(QColor("#85929e"), 1.7)
+        painter.setPen(pen)
+        painter.setBrush(QColor("#85929e"))
+
+        for current, nxt in zip(self.units, self.units[1:]):
+            a = unit_rects[_unit_order(current)]
+            b = unit_rects[_unit_order(nxt)]
+            if abs(a.center().y() - b.center().y()) < 2:
+                start = QPointF(a.right() + 2, a.center().y())
+                end = QPointF(b.left() - 2, b.center().y())
+                painter.drawLine(start, end)
+                self._draw_arrow_head(painter, end, "right")
+            else:
+                mid_y = a.bottom() + 26
+                path = QPainterPath(QPointF(a.center().x(), a.bottom() + 2))
+                path.lineTo(QPointF(a.center().x(), mid_y))
+                path.lineTo(QPointF(b.center().x(), mid_y))
+                path.lineTo(QPointF(b.center().x(), b.top() - 2))
+                painter.drawPath(path)
+                self._draw_arrow_head(painter, QPointF(b.center().x(), b.top() - 2), "down")
+
+    def _draw_arrow_head(self, painter: QPainter, point: QPointF, direction: str) -> None:
+        if direction == "right":
+            polygon = [
+                QPointF(point.x(), point.y()),
+                QPointF(point.x() - 7, point.y() - 4),
+                QPointF(point.x() - 7, point.y() + 4),
+            ]
+        else:
+            polygon = [
+                QPointF(point.x(), point.y()),
+                QPointF(point.x() - 4, point.y() - 7),
+                QPointF(point.x() + 4, point.y() - 7),
+            ]
+        painter.drawPolygon(polygon)
+
+    def _draw_sampling_points(self, painter: QPainter, unit_rects: dict[int, QRectF]) -> None:
+        offsets: dict[int, int] = {}
+        for point in self.sampling_points:
+            after_order = int(getattr(point, "after_unit_order", 0) or 0)
+            anchor = unit_rects.get(after_order)
+            if anchor is None:
+                continue
+            offset = offsets.get(after_order, 0)
+            offsets[after_order] = offset + 1
+            code = str(getattr(point, "code", "SP")).split("_")[0]
+            name = str(getattr(point, "name", ""))
+            badge_w = min(138, max(92, anchor.width() - 14))
+            badge = QRectF(
+                anchor.center().x() - badge_w / 2,
+                anchor.bottom() + 10 + offset * 28,
+                badge_w,
+                23,
+            )
+            painter.setPen(QPen(QColor("#566573"), 1))
+            painter.setBrush(QColor("#ffffff"))
+            painter.drawRoundedRect(badge, 11, 11)
+            painter.setPen(QColor("#2c3e50"))
+            font = QFont()
+            font.setPointSize(7)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(badge.adjusted(6, 0, -6, 0), Qt.AlignCenter, f"{code} · {name}")
+
+    def _draw_legend_and_note(self, painter: QPainter, rect, unit_rects: dict[int, QRectF], metrics: dict) -> None:
+        if unit_rects:
+            bottom = max(box.bottom() for box in unit_rects.values()) + 48
+        else:
+            bottom = rect.top() + metrics["top"] + 90
+
+        categories = []
+        seen = set()
+        for unit in self.units:
+            category = self.category_for_unit(getattr(unit, "unit_type", "other") or "other")
+            if category not in seen:
+                seen.add(category)
+                categories.append(category)
+
+        x = rect.left()
+        y = bottom
+        font = QFont()
+        font.setPointSize(7)
+        font.setBold(True)
+        painter.setFont(font)
+        for category in categories[:8]:
+            label, fill, border = self.CATEGORY_STYLES[category]
+            chip_w = max(82, len(label) * 6 + 24)
+            if x + chip_w > rect.right():
+                x = rect.left()
+                y += 24
+            chip = QRectF(x, y, chip_w, 18)
+            painter.setPen(QPen(QColor(border), 1))
+            painter.setBrush(QColor(fill))
+            painter.drawRoundedRect(chip, 8, 8)
+            painter.setPen(QColor(border))
+            painter.drawText(chip, Qt.AlignCenter, label)
+            x += chip_w + 8
+
+        note = self.PLANT_NOTES.get(self.plant_slug)
+        if note:
+            note_y = y + 30
+            note_rect = QRectF(rect.left(), note_y, rect.width(), 42)
+            painter.setPen(QPen(QColor("#d6dbdf"), 1))
+            painter.setBrush(QColor("#f8f9fa"))
+            painter.drawRoundedRect(note_rect, 6, 6)
+            painter.setPen(QColor(C_TEXT))
+            note_font = QFont()
+            note_font.setPointSize(8)
+            painter.setFont(note_font)
+            painter.drawText(note_rect.adjusted(10, 5, -10, -5), Qt.AlignLeft | Qt.AlignVCenter | Qt.TextWordWrap, note)
+
+
+class PlantProcessOverview(QWidget):
+    """Large animated plant process overview with clear scientific lanes."""
+
+    CATEGORY_STYLES = PlantProcessDiagram.CATEGORY_STYLES
+    TYPE_TO_CATEGORY = PlantProcessDiagram.TYPE_TO_CATEGORY
+    PLANT_NOTES = {
+        "daspoort": (
+            "Daspoort note: heritage trickling filters/anammox are drawn as dashed "
+            "research context, not as the normal mainline BNR hydraulic path."
+        ),
+        "zeekoegat": (
+            "Zeekoegat note: BNR mode changes the scientific assumption set; the "
+            "visual mode badge follows the current model control."
+        ),
+        "phola": (
+            "Phola note: pond retention, fixed-film treatment, humus settling, "
+            "reed-bed polishing, and sludge drying are shown as distinct process paths."
+        ),
+    }
+    TIMER_MS = 66
+    FLOW_SPEED = 0.018
+
+    def __init__(self, plant, units: list, sampling_points: list, parent=None):
+        super().__init__(parent)
+        self.plant = plant
+        self.units = sorted(units, key=_unit_order)
+        self.sampling_points = sorted(sampling_points, key=_point_order)
+        self.plant_slug = str(_plant_attr(plant, "slug", "") or "")
+        self.plant_name = str(_plant_attr(plant, "name", "Plant") or "Plant")
+        self.process_family = str(_plant_attr(plant, "process_family", "") or "")
+        self._inputs: PlantTwinInputs | None = None
+        self._outputs: PlantTwinOutputs | None = None
+        self._bnr_mode = "A2O / 3-stage Bardenpho"
+        self._flow_phase = 0.0
+        self._geo: dict | None = None
+
+        self.setMinimumHeight(560)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+        self.setAttribute(Qt.WA_OpaquePaintEvent)
+
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(self.TIMER_MS)
+
+    def sizeHint(self) -> QSize:
+        return QSize(1020, 600)
+
+    def ordered_unit_names(self) -> list[str]:
+        return [getattr(unit, "name", "") for unit in self.units]
+
+    def ordered_sampling_codes(self) -> list[str]:
+        return [getattr(point, "code", "") for point in self.sampling_points]
+
+    @classmethod
+    def category_for_unit(cls, unit_type: str) -> str:
+        return cls.TYPE_TO_CATEGORY.get(unit_type, "other")
+
+    @classmethod
+    def category_label_for_unit(cls, unit_type: str) -> str:
+        category = cls.category_for_unit(unit_type)
+        return cls.CATEGORY_STYLES[category][0]
+
+    def set_bnr_mode(self, mode: str) -> None:
+        self._bnr_mode = mode or self._bnr_mode
+        self.update()
+
+    def set_results(self, inputs: PlantTwinInputs, outputs: PlantTwinOutputs) -> None:
+        self._inputs = inputs
+        self._outputs = outputs
+        self._bnr_mode = inputs.bnr_mode
+        self.update()
+
+    def animation_active(self) -> bool:
+        return self._timer.isActive()
+
+    def pfas_fate_summary(self) -> str:
+        if not self._outputs:
+            return "PFAS fate: waiting for model run. Transfer only, not destruction."
+        return (
+            f"PFAS fate: effluent {self._outputs.pfas_effluent_g_day:.3f} g/d · "
+            f"sludge/solids {self._outputs.pfas_sludge_g_day:.3f} g/d · "
+            f"unresolved {self._outputs.pfas_unresolved_g_day:.3f} g/d. "
+            "Transfer only, not destruction."
+        )
+
+    def resizeEvent(self, event) -> None:
+        self._geo = None
+        metrics = self._layout_for_width(max(340, event.size().width()))
+        if self.minimumHeight() != metrics["required_height"]:
+            self.setMinimumHeight(metrics["required_height"])
+        super().resizeEvent(event)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not self._timer.isActive():
+            self._timer.start(self.TIMER_MS)
+
+    def hideEvent(self, event) -> None:
+        super().hideEvent(event)
+        self._timer.stop()
+
+    def _tick(self) -> None:
+        self._flow_phase = (self._flow_phase + self.FLOW_SPEED) % 1.0
+        self.update()
+
+    def _main_units(self) -> list:
+        main = []
+        for unit in self.units:
+            unit_type = getattr(unit, "unit_type", "") or ""
+            if self._is_sludge_unit(unit):
+                continue
+            if self._is_context_unit(unit):
+                continue
+            main.append(unit)
+        return main
+
+    def _sludge_units(self) -> list:
+        return [unit for unit in self.units if self._is_sludge_unit(unit)]
+
+    def _context_units(self) -> list:
+        return [unit for unit in self.units if self._is_context_unit(unit)]
+
+    def _is_sludge_unit(self, unit) -> bool:
+        return self.category_for_unit(getattr(unit, "unit_type", "") or "") == "sludge"
+
+    def _is_context_unit(self, unit) -> bool:
+        return self.plant_slug == "daspoort" and getattr(unit, "unit_type", "") == "trickling_filter"
+
+    def _layout_for_width(self, width: int) -> dict:
+        narrow = width < 760
+        main = self._main_units()
+        sludge = self._sludge_units()
+        context = self._context_units()
+        if narrow:
+            card_w = max(230, min(360, width - 96))
+            card_h = 74
+            step_y = 104
+            required = 118 + len(main) * step_y + (len(sludge) + len(context)) * 92 + 190
+            return {
+                "mode": "narrow",
+                "layout_type": "phola_vertical" if self.plant_slug == "phola" else "bnr_vertical",
+                "card_w": card_w,
+                "card_h": card_h,
+                "required_height": max(620, int(required)),
+                "columns": 1,
+            }
+
+        if self.plant_slug == "phola":
+            required = 960
+            layout_type = "pond_biofilm_wetland"
+        else:
+            required = 960 if self.plant_slug == "daspoort" else 930
+            layout_type = "bnr_lanes"
+        return {
+            "mode": "wide",
+            "layout_type": layout_type,
+            "card_w": 148,
+            "card_h": 84,
+            "required_height": required,
+            "columns": 6,
+        }
+
+    def _build_geometry(self, width: int, height: int) -> dict:
+        metrics = self._layout_for_width(width)
+        rect = self.rect().adjusted(18, 16, -18, -16)
+        if metrics["mode"] == "narrow":
+            return self._build_narrow_geometry(rect, metrics)
+        if self.plant_slug == "phola":
+            return self._build_phola_geometry(rect, metrics)
+        return self._build_bnr_geometry(rect, metrics)
+
+    def _build_narrow_geometry(self, rect, metrics: dict) -> dict:
+        unit_rects = {}
+        lanes = []
+        x = rect.center().x() - metrics["card_w"] / 2
+        y = rect.top() + 104
+        for unit in self._main_units():
+            box = QRectF(x, y, metrics["card_w"], metrics["card_h"])
+            unit_rects[_unit_order(unit)] = box
+            lanes.append((self.category_label_for_unit(getattr(unit, "unit_type", "")), QRectF(rect.left(), y - 10, rect.width(), metrics["card_h"] + 20)))
+            y += 104
+        for unit in self._sludge_units() + self._context_units():
+            box = QRectF(x, y, metrics["card_w"], metrics["card_h"])
+            unit_rects[_unit_order(unit)] = box
+            y += 92
+        return {"metrics": metrics, "rect": rect, "unit_rects": unit_rects, "lanes": lanes}
+
+    def _build_bnr_geometry(self, rect, metrics: dict) -> dict:
+        unit_rects = {}
+        lane_h = 122
+        lanes = [
+            ("Preliminary / primary", QRectF(rect.left(), rect.top() + 112, rect.width(), lane_h)),
+            ("Biological BNR zones", QRectF(rect.left(), rect.top() + 274, rect.width(), lane_h)),
+            ("Clarification / polishing", QRectF(rect.left(), rect.top() + 436, rect.width(), lane_h)),
+            ("Sludge + PFAS solids path", QRectF(rect.left(), rect.top() + 598, rect.width(), lane_h)),
+        ]
+        if self.plant_slug == "daspoort":
+            lanes.append(("Research context only", QRectF(rect.left(), rect.top() + 692, rect.width(), 72)))
+
+        lane_groups = {
+            "pre": [u for u in self._main_units() if self.category_for_unit(getattr(u, "unit_type", "")) in {"preliminary", "primary"}],
+            "bio": [u for u in self._main_units() if self.category_for_unit(getattr(u, "unit_type", "")) in {"anaerobic", "anoxic", "aerobic"}],
+            "polish": [u for u in self._main_units() if self.category_for_unit(getattr(u, "unit_type", "")) in {"clarification", "tertiary", "disinfection"}],
+            "sludge": self._sludge_units(),
+            "context": self._context_units(),
+        }
+        lane_rects = {
+            "pre": lanes[0][1],
+            "bio": lanes[1][1],
+            "polish": lanes[2][1],
+            "sludge": lanes[3][1],
+            "context": lanes[4][1] if len(lanes) > 4 else lanes[3][1],
+        }
+
+        main_units = self._main_units()
+        process_rect = rect.adjusted(24, 0, -24, 0)
+        card_w = self._ordered_card_width(process_rect.width(), len(main_units))
+        card_h = metrics["card_h"]
+        x_by_order = self._ordered_x_positions(main_units, process_rect, card_w)
+
+        for key in ("pre", "bio", "polish"):
+            lane = lane_rects[key]
+            y = self._unit_y_in_lane(lane, card_h)
+            for unit in lane_groups[key]:
+                x = x_by_order.get(_unit_order(unit), process_rect.left())
+                unit_rects[_unit_order(unit)] = QRectF(x, y, card_w, card_h)
+
+        clarifier = next((u for u in main_units if getattr(u, "unit_type", "") == "secondary_clarifier"), None)
+        sludge_w = min(220, max(card_w + 28, 176))
+        sludge_h = card_h
+        sludge_lane = lane_rects["sludge"]
+        sludge_anchor = unit_rects.get(_unit_order(clarifier)) if clarifier else None
+        for index, unit in enumerate(lane_groups["sludge"]):
+            center_x = sludge_anchor.center().x() if sludge_anchor else process_rect.center().x()
+            x = self._clamp(center_x - sludge_w / 2 + index * (sludge_w + 18), process_rect.left(), process_rect.right() - sludge_w)
+            y = self._unit_y_in_lane(sludge_lane, sludge_h)
+            unit_rects[_unit_order(unit)] = QRectF(x, y, sludge_w, sludge_h)
+
+        context_lane = lane_rects["context"]
+        source = next((u for u in main_units if getattr(u, "unit_type", "") == "primary_settling"), None)
+        source_box = unit_rects.get(_unit_order(source)) if source else None
+        context_w = min(224, max(card_w + 36, 184))
+        context_h = 58 if self.plant_slug == "daspoort" else card_h
+        for index, unit in enumerate(lane_groups["context"]):
+            center_x = source_box.center().x() if source_box else process_rect.center().x()
+            context_min_x = process_rect.left()
+            if self._is_context_unit(unit):
+                context_min_x = max(context_min_x, context_lane.left() + 220)
+            x = self._clamp(
+                center_x - context_w / 2 + 64 + index * (context_w + 18),
+                context_min_x,
+                process_rect.right() - context_w,
+            )
+            y = self._unit_y_in_lane(context_lane, context_h)
+            unit_rects[_unit_order(unit)] = QRectF(x, y, context_w, context_h)
+        return {"metrics": metrics, "rect": rect, "unit_rects": unit_rects, "lanes": lanes}
+
+    def _build_phola_geometry(self, rect, metrics: dict) -> dict:
+        unit_rects = {}
+        lane_h = 122
+        lanes = [
+            ("Preliminary treatment", QRectF(rect.left(), rect.top() + 112, rect.width(), lane_h)),
+            ("Anaerobic pond retention", QRectF(rect.left(), rect.top() + 274, rect.width(), lane_h)),
+            ("Biofilm + humus settling", QRectF(rect.left(), rect.top() + 436, rect.width(), lane_h)),
+            ("Disinfection / reed-bed polishing", QRectF(rect.left(), rect.top() + 598, rect.width(), lane_h)),
+            ("Sludge drying path", QRectF(rect.left(), rect.top() + 692, rect.width(), 72)),
+        ]
+        lane_groups = {
+            "pre": [u for u in self._main_units() if self.category_for_unit(getattr(u, "unit_type", "")) == "preliminary"],
+            "pond": [u for u in self._main_units() if getattr(u, "unit_type", "") == "anaerobic_pond"],
+            "biofilm": [u for u in self._main_units() if getattr(u, "unit_type", "") in {"trickling_filter", "humus_tank"}],
+            "polish": [u for u in self._main_units() if getattr(u, "unit_type", "") in {"disinfection", "reed_bed"}],
+            "sludge": self._sludge_units(),
+        }
+        lane_rects = {"pre": lanes[0][1], "pond": lanes[1][1], "biofilm": lanes[2][1], "polish": lanes[3][1], "sludge": lanes[4][1]}
+
+        main_units = self._main_units()
+        process_rect = rect.adjusted(24, 0, -24, 0)
+        card_w = self._ordered_card_width(process_rect.width(), len(main_units))
+        card_h = metrics["card_h"]
+        x_by_order = self._ordered_x_positions(main_units, process_rect, card_w)
+        for key in ("pre", "pond", "biofilm", "polish"):
+            lane = lane_rects[key]
+            y = self._unit_y_in_lane(lane, card_h)
+            for unit in lane_groups[key]:
+                x = x_by_order.get(_unit_order(unit), process_rect.left())
+                unit_rects[_unit_order(unit)] = QRectF(x, y, card_w, card_h)
+
+        pond = next((u for u in main_units if getattr(u, "unit_type", "") == "anaerobic_pond"), None)
+        pond_box = unit_rects.get(_unit_order(pond)) if pond else None
+        sludge_w = min(210, max(card_w + 24, 168))
+        sludge_h = 58
+        for unit in lane_groups["sludge"]:
+            center_x = pond_box.center().x() if pond_box else process_rect.center().x()
+            x = self._clamp(center_x - sludge_w / 2, process_rect.left(), process_rect.right() - sludge_w)
+            y = self._unit_y_in_lane(lane_rects["sludge"], sludge_h)
+            unit_rects[_unit_order(unit)] = QRectF(x, y, sludge_w, sludge_h)
+        return {"metrics": metrics, "rect": rect, "unit_rects": unit_rects, "lanes": lanes}
+
+    def _ordered_card_width(self, process_width: float, count: int) -> float:
+        if count <= 1:
+            return min(166, max(128, process_width))
+        minimum_gap = 14
+        width = (process_width - minimum_gap * (count - 1)) / count
+        return min(166, max(108, width))
+
+    def _ordered_x_positions(self, units: list, process_rect: QRectF, card_w: float) -> dict[int, float]:
+        if not units:
+            return {}
+        if len(units) == 1:
+            return {_unit_order(units[0]): process_rect.center().x() - card_w / 2}
+        step = (process_rect.width() - card_w) / (len(units) - 1)
+        positions = {}
+        for index, unit in enumerate(units):
+            x = process_rect.left() + index * step
+            positions[_unit_order(unit)] = self._clamp(x, process_rect.left(), process_rect.right() - card_w)
+        return positions
+
+    def _unit_y_in_lane(self, lane: QRectF, card_h: float) -> float:
+        if lane.height() >= card_h + 38:
+            return lane.top() + 32
+        return lane.center().y() - card_h / 2
+
+    @staticmethod
+    def _clamp(value: float, low: float, high: float) -> float:
+        if high < low:
+            return low
+        return max(low, min(high, value))
+
+    def _place_units_in_lane(self, unit_rects: dict, units: list, lane: QRectF, card_w: float, card_h: float) -> None:
+        if not units:
+            return
+        count = len(units)
+        gap = min(46, max(22, (lane.width() - count * card_w) / max(1, count + 1)))
+        total = count * card_w + (count - 1) * gap
+        x = lane.left() + max(20, (lane.width() - total) / 2)
+        y = lane.center().y() - card_h / 2
+        for unit in units:
+            unit_rects[_unit_order(unit)] = QRectF(x, y, card_w, card_h)
+            x += card_w + gap
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter.fillRect(self.rect(), QColor("#f4f7f9"))
+        self._draw_background_grid(painter)
+
+        self._geo = self._build_geometry(self.width(), self.height())
+        self._draw_header(painter, self._geo)
+        self._draw_lanes(painter, self._geo)
+        paths = self._draw_main_flow(painter, self._geo)
+        sludge_paths = self._draw_secondary_paths(painter, self._geo)
+        self._draw_particles(painter, paths, QColor("#3498db"), radius=4.2)
+        self._draw_particles(painter, sludge_paths, QColor("#c0392b"), radius=3.8, offset=0.35)
+        self._draw_units(painter, self._geo)
+        self._draw_sampling_points(painter, self._geo)
+        self._draw_overlays(painter, self._geo)
+        self._draw_note(painter, self._geo)
+        painter.end()
+
+    def _draw_background_grid(self, painter: QPainter) -> None:
+        painter.setPen(QPen(QColor(220, 228, 234, 150), 0.5))
+        for x in range(0, self.width(), 52):
+            painter.drawLine(QPointF(x, 0), QPointF(x, self.height()))
+        for y in range(0, self.height(), 52):
+            painter.drawLine(QPointF(0, y), QPointF(self.width(), y))
+
+    def _draw_header(self, painter: QPainter, geo: dict) -> None:
+        rect = geo["rect"]
+        painter.setPen(QColor(C_TEXT))
+        font = QFont()
+        font.setPointSize(14)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(QRectF(rect.left(), rect.top(), rect.width() * 0.62, 28), Qt.AlignLeft | Qt.AlignVCenter, self.plant_name)
+
+        sub_font = QFont()
+        sub_font.setPointSize(9)
+        painter.setFont(sub_font)
+        painter.setPen(QColor(C_MUTED))
+        painter.drawText(
+            QRectF(rect.left(), rect.top() + 30, rect.width() * 0.72, 34),
+            Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap,
+            f"{self.process_family} · animated Scientific Twin overview",
+        )
+
+        badge = QRectF(rect.right() - 290, rect.top(), 290, 30)
+        painter.setPen(QPen(QColor("#8e44ad"), 1))
+        painter.setBrush(QColor("#f4ecf7"))
+        painter.drawRoundedRect(badge, 6, 6)
+        painter.setPen(QColor("#6c3483"))
+        badge_font = QFont()
+        badge_font.setPointSize(8)
+        badge_font.setBold(True)
+        painter.setFont(badge_font)
+        if self.plant_slug == "zeekoegat":
+            badge_text = f"BNR mode: {self._bnr_mode}"
+        else:
+            badge_text = "Scientific Twin: explanatory, not SCADA"
+        painter.drawText(badge.adjusted(8, 0, -8, 0), Qt.AlignCenter, badge_text)
+
+    def _draw_lanes(self, painter: QPainter, geo: dict) -> None:
+        lane_font = QFont()
+        lane_font.setPointSize(8)
+        lane_font.setBold(True)
+        painter.setFont(lane_font)
+        for label, lane in geo["lanes"]:
+            painter.setPen(QPen(QColor("#d6dbdf"), 1))
+            painter.setBrush(QColor(255, 255, 255, 168))
+            painter.drawRoundedRect(lane, 8, 8)
+            label_rect = QRectF(lane.left() + 8, lane.top() + 6, 170, 18)
+            painter.setPen(QColor("#566573"))
+            painter.drawText(label_rect, Qt.AlignLeft | Qt.AlignVCenter, label)
+
+    def _draw_units(self, painter: QPainter, geo: dict) -> None:
+        for unit in self.units:
+            box = geo["unit_rects"].get(_unit_order(unit))
+            if not box:
+                continue
+            self._draw_unit_box(painter, unit, box)
+
+    def _draw_unit_box(self, painter: QPainter, unit, box: QRectF) -> None:
+        unit_type = getattr(unit, "unit_type", "other") or "other"
+        category = self.category_for_unit(unit_type)
+        label, fill, border = self.CATEGORY_STYLES[category]
+        is_context = self._is_context_unit(unit)
+
+        painter.setPen(QPen(QColor(border), 1.5, Qt.DashLine if is_context else Qt.SolidLine))
+        painter.setBrush(QColor(fill))
+        painter.drawRoundedRect(box, 8, 8)
+
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(border))
+        tag = QRectF(box.left() + 8, box.top() + 8, min(88, box.width() - 16), 18)
+        painter.drawRoundedRect(tag, 6, 6)
+        painter.setPen(QColor("#ffffff"))
+        tag_font = QFont()
+        tag_font.setPointSize(7)
+        tag_font.setBold(True)
+        painter.setFont(tag_font)
+        painter.drawText(tag, Qt.AlignCenter, label)
+
+        painter.setPen(QColor(C_TEXT))
+        name_font = QFont()
+        name_font.setPointSize(8)
+        name_font.setBold(True)
+        painter.setFont(name_font)
+        painter.drawText(
+            QRectF(box.left() + 9, box.top() + 32, box.width() - 18, box.height() - 38),
+            Qt.AlignLeft | Qt.AlignTop | Qt.TextWordWrap,
+            getattr(unit, "name", ""),
+        )
+        self._draw_unit_activity(painter, unit, box)
+
+    def _draw_unit_activity(self, painter: QPainter, unit, box: QRectF) -> None:
+        category = self.category_for_unit(getattr(unit, "unit_type", "") or "")
+        painter.save()
+        painter.setClipRect(box.adjusted(2, 2, -2, -2))
+        if category in {"anaerobic", "anoxic", "aerobic", "biofilm"}:
+            color = QColor("#5dade2" if category == "aerobic" else "#7dcea0")
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(color.red(), color.green(), color.blue(), 90))
+            for i in range(5):
+                t = (self._flow_phase + i * 0.19) % 1.0
+                x = box.left() + 20 + (box.width() - 40) * ((i * 0.37) % 1.0)
+                y = box.bottom() - 12 - t * (box.height() - 34)
+                r = 2.2 + 1.5 * math.sin((self._flow_phase + i) * math.tau)
+                painter.drawEllipse(QPointF(x, y), max(1.4, r), max(1.4, r))
+        elif category == "pond":
+            painter.setPen(QPen(QColor("#148f77"), 1.1))
+            for i in range(3):
+                y = box.top() + 46 + i * 9
+                path = QPainterPath(QPointF(box.left() + 12, y))
+                for x_i in range(0, int(box.width() - 24), 18):
+                    x = box.left() + 12 + x_i
+                    wave = math.sin(self._flow_phase * math.tau + x_i * 0.35 + i) * 3
+                    path.lineTo(QPointF(x, y + wave))
+                painter.drawPath(path)
+        painter.restore()
+
+    def _draw_main_flow(self, painter: QPainter, geo: dict) -> list[QPainterPath]:
+        paths = []
+        main = self._main_units()
+        for current, nxt in zip(main, main[1:]):
+            a = geo["unit_rects"].get(_unit_order(current))
+            b = geo["unit_rects"].get(_unit_order(nxt))
+            if not a or not b:
+                continue
+            path = self._path_between(a, b)
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(255, 255, 255, 210), 5.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.drawPath(path)
+            painter.setPen(QPen(QColor("#2471a3"), 2.5, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.drawPath(path)
+            self._draw_arrowhead(painter, path, QColor("#2471a3"))
+            paths.append(path)
+        return paths
+
+    def _draw_secondary_paths(self, painter: QPainter, geo: dict) -> list[QPainterPath]:
+        paths = []
+        unit_rects = geo["unit_rects"]
+        clarifiers = [u for u in self.units if getattr(u, "unit_type", "") in {"secondary_clarifier", "humus_tank", "anaerobic_pond"}]
+        sludge_units = self._sludge_units()
+
+        if sludge_units and clarifiers:
+            source = unit_rects.get(_unit_order(clarifiers[-1]))
+            target = unit_rects.get(_unit_order(sludge_units[0]))
+            if source and target:
+                path = self._path_between(source, target, vertical_bias=28)
+                painter.setBrush(Qt.NoBrush)
+                painter.setPen(QPen(QColor(255, 255, 255, 210), 5.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                painter.drawPath(path)
+                painter.setPen(QPen(QColor("#c0392b"), 2.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                painter.drawPath(path)
+                self._draw_arrowhead(painter, path, QColor("#c0392b"))
+                label_w = 150
+                label_x = target.right() + 10
+                if label_x + label_w > geo["rect"].right():
+                    label_x = target.left() - label_w - 10
+                label_rect = QRectF(label_x, target.top() + 7, label_w, 22)
+                self._draw_path_label(painter, path, "Sludge-bound PFAS", label_rect=label_rect)
+                paths.append(path)
+
+        if self.plant_slug in {"daspoort", "zeekoegat"}:
+            anoxic = next((u for u in self.units if getattr(u, "unit_type", "") == "anoxic"), None)
+            secondary = next((u for u in self.units if getattr(u, "unit_type", "") == "secondary_clarifier"), None)
+            if anoxic and secondary:
+                a = unit_rects.get(_unit_order(secondary))
+                b = unit_rects.get(_unit_order(anoxic))
+                if a and b:
+                    path = QPainterPath(QPointF(a.center().x(), a.bottom()))
+                    y = max(a.bottom(), b.bottom()) + 38
+                    path.lineTo(QPointF(a.center().x(), y))
+                    path.lineTo(QPointF(b.center().x(), y))
+                    path.lineTo(QPointF(b.center().x(), b.bottom() + 4))
+                    painter.setBrush(Qt.NoBrush)
+                    painter.setPen(QPen(QColor(255, 255, 255, 210), 4.6, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                    painter.drawPath(path)
+                    painter.setPen(QPen(QColor("#16a085"), 1.8, Qt.DashLine, Qt.RoundCap, Qt.RoundJoin))
+                    painter.drawPath(path)
+                    self._draw_arrowhead(painter, path, QColor("#16a085"))
+                    self._draw_path_label(painter, path, "RAS / nitrate recycle")
+
+        for context in self._context_units():
+            target = unit_rects.get(_unit_order(context))
+            source_unit = next((u for u in self.units if getattr(u, "unit_type", "") == "primary_settling"), None)
+            source = unit_rects.get(_unit_order(source_unit)) if source_unit else None
+            if target:
+                if self._is_context_unit(context):
+                    x0 = max(geo["rect"].left() + 12, target.left() - 38)
+                    path = QPainterPath(QPointF(x0, target.center().y()))
+                    path.lineTo(QPointF(target.left() - 8, target.center().y()))
+                elif source:
+                    path = self._path_between(source, target, vertical_bias=18)
+                else:
+                    continue
+                painter.setBrush(Qt.NoBrush)
+                painter.setPen(QPen(QColor(255, 255, 255, 210), 4.4, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+                painter.drawPath(path)
+                painter.setPen(QPen(QColor("#8e44ad"), 1.8, Qt.DashLine, Qt.RoundCap, Qt.RoundJoin))
+                painter.drawPath(path)
+                self._draw_arrowhead(painter, path, QColor("#8e44ad"))
+        return paths
+
+    def _path_between(self, a: QRectF, b: QRectF, vertical_bias: float = 0.0) -> QPainterPath:
+        start = QPointF(a.right(), a.center().y())
+        end = QPointF(b.left(), b.center().y())
+        if b.center().x() < a.center().x() or abs(a.center().y() - b.center().y()) > 46:
+            start = QPointF(a.center().x(), a.bottom())
+            end = QPointF(b.center().x(), b.top())
+            mid_y = (start.y() + end.y()) / 2 + vertical_bias
+            path = QPainterPath(start)
+            path.lineTo(QPointF(start.x(), mid_y))
+            path.lineTo(QPointF(end.x(), mid_y))
+            path.lineTo(end)
+            return path
+        mid_x = (start.x() + end.x()) / 2
+        path = QPainterPath(start)
+        path.cubicTo(QPointF(mid_x, start.y()), QPointF(mid_x, end.y()), end)
+        return path
+
+    def _draw_arrowhead(self, painter: QPainter, path: QPainterPath, color: QColor) -> None:
+        end = path.pointAtPercent(1.0)
+        before = path.pointAtPercent(0.965)
+        angle = math.atan2(end.y() - before.y(), end.x() - before.x())
+        size = 9
+        pts = QPolygonF([
+            end,
+            QPointF(end.x() - size * math.cos(angle - 0.45), end.y() - size * math.sin(angle - 0.45)),
+            QPointF(end.x() - size * math.cos(angle + 0.45), end.y() - size * math.sin(angle + 0.45)),
+        ])
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(color)
+        painter.drawPolygon(pts)
+
+    def _draw_path_label(self, painter: QPainter, path: QPainterPath, text: str, label_rect: QRectF | None = None) -> None:
+        if label_rect is None:
+            pos = path.pointAtPercent(0.52)
+            label = QRectF(pos.x() - 64, pos.y() - 12, 128, 20)
+        else:
+            label = label_rect
+        painter.setPen(QPen(QColor("#d6dbdf"), 1))
+        painter.setBrush(QColor(255, 255, 255, 218))
+        painter.drawRoundedRect(label, 7, 7)
+        painter.setPen(QColor(C_TEXT))
+        font = QFont()
+        font.setPointSize(7)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(label, Qt.AlignCenter, text)
+
+    def _draw_particles(self, painter: QPainter, paths: list[QPainterPath], color: QColor, radius: float, offset: float = 0.0) -> None:
+        painter.setPen(Qt.NoPen)
+        for path_i, path in enumerate(paths):
+            for i in range(3):
+                t = (self._flow_phase + offset + i * 0.29 + path_i * 0.11) % 1.0
+                pos = path.pointAtPercent(t)
+                alpha = 225 - i * 45
+                painter.setBrush(QColor(color.red(), color.green(), color.blue(), alpha))
+                painter.drawEllipse(pos, radius - i * 0.55, radius - i * 0.55)
+
+    def _draw_sampling_points(self, painter: QPainter, geo: dict) -> None:
+        unit_rects = geo["unit_rects"]
+        pulse = 1.0 + 0.12 * math.sin(self._flow_phase * math.tau)
+        offsets: dict[int, int] = {}
+        for point in self.sampling_points:
+            after_order = int(getattr(point, "after_unit_order", 0) or 0)
+            anchor = unit_rects.get(after_order)
+            if not anchor:
+                continue
+            offset = offsets.get(after_order, 0)
+            offsets[after_order] = offset + 1
+            code = str(getattr(point, "code", "SP")).split("_")[0]
+            name = str(getattr(point, "name", ""))
+            x = anchor.center().x()
+            y = anchor.top() - 17 - offset * 26
+            r = 9.5 * pulse
+            painter.setPen(QPen(QColor("#c0392b"), 1.5))
+            painter.setBrush(QColor(255, 255, 255, 235))
+            painter.drawEllipse(QPointF(x, y), r, r)
+            painter.setPen(QColor("#c0392b"))
+            sp_font = QFont()
+            sp_font.setPointSize(7)
+            sp_font.setBold(True)
+            painter.setFont(sp_font)
+            painter.drawText(QRectF(x - 20, y - 22, 40, 12), Qt.AlignCenter, code)
+            label = QRectF(x - 58, y + 11, 116, 18)
+            painter.setPen(QPen(QColor("#d6dbdf"), 1))
+            painter.setBrush(QColor("#ffffff"))
+            painter.drawRoundedRect(label, 7, 7)
+            painter.setPen(QColor(C_TEXT))
+            painter.drawText(label.adjusted(4, 0, -4, 0), Qt.AlignCenter, name)
+
+    def _draw_overlays(self, painter: QPainter, geo: dict) -> None:
+        rect = geo["rect"]
+        cards = []
+        if self._inputs:
+            cards.extend([
+                ("Flow", f"{self._inputs.flow_mld:.2f} ML/d"),
+                ("HRT", f"{self._inputs.hrt_hours:.1f} h"),
+                ("SRT/ret.", f"{self._inputs.srt_days:.1f} d" if self._inputs.srt_days else f"{self._inputs.hrt_hours:.1f} h"),
+                ("MLSS", f"{self._inputs.mlss_mgl:.0f} mg/L"),
+            ])
+        if self._outputs:
+            cards.extend([
+                ("COD", f"{self._outputs.cod_removal_pct:.1f}%"),
+                ("NH4", f"{self._outputs.nh4_removal_pct:.1f}%"),
+                ("PFAS", f"{self._outputs.pfas_removal_pct:.2f}% transfer"),
+            ])
+        else:
+            cards.append(("Model", "waiting for run"))
+
+        visible_cards = cards[:7]
+        if visible_cards:
+            gap = 8
+            min_card_w = 88
+            per_row = max(1, min(len(visible_cards), int((rect.width() + gap) / (min_card_w + gap))))
+            card_w = min(112, (rect.width() - gap * (per_row - 1)) / per_row)
+            total_w = per_row * card_w + (per_row - 1) * gap
+            x0 = rect.right() - total_w
+            y0 = rect.top() + 68
+            for index, (title, value) in enumerate(visible_cards):
+                row = index // per_row
+                col = index % per_row
+                x = x0 + col * (card_w + gap)
+                y = y0 + row * 42
+                self._draw_metric_card(painter, QRectF(x, y, card_w, 36), title, value)
+
+        if self._outputs:
+            fate = self.pfas_fate_summary()
+            footer_top = self._footer_top(geo)
+            footer_w = min(rect.width(), 860)
+            conf = QRectF(rect.left(), footer_top, footer_w, 32)
+            painter.setPen(QPen(QColor("#d6dbdf"), 1))
+            painter.setBrush(QColor("#ffffff"))
+            painter.drawRoundedRect(conf, 8, 8)
+            painter.setPen(QColor(C_TEXT))
+            font = QFont()
+            font.setPointSize(8)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.drawText(conf.adjusted(10, 0, -10, 0), Qt.AlignLeft | Qt.AlignVCenter, self._outputs.confidence_label)
+
+            card = QRectF(rect.left(), footer_top + 40, footer_w, 58)
+            painter.setPen(QPen(QColor("#f5b7b1"), 1))
+            painter.setBrush(QColor("#fdecea"))
+            painter.drawRoundedRect(card, 8, 8)
+            painter.setPen(QColor("#922b21"))
+            painter.drawText(card.adjusted(10, 6, -10, -6), Qt.AlignLeft | Qt.AlignVCenter | Qt.TextWordWrap, fate)
+
+    def _draw_metric_card(self, painter: QPainter, box: QRectF, title: str, value: str) -> None:
+        painter.setPen(QPen(QColor("#d6dbdf"), 1))
+        painter.setBrush(QColor(255, 255, 255, 232))
+        painter.drawRoundedRect(box, 7, 7)
+        painter.setPen(QColor(C_MUTED))
+        title_font = QFont()
+        title_font.setPointSize(7)
+        title_font.setBold(True)
+        painter.setFont(title_font)
+        painter.drawText(QRectF(box.left() + 8, box.top() + 5, box.width() - 16, 12), Qt.AlignLeft | Qt.AlignVCenter, title)
+        painter.setPen(QColor(C_TEXT))
+        value_font = QFont()
+        value_font.setPointSize(8)
+        value_font.setBold(True)
+        painter.setFont(value_font)
+        painter.drawText(QRectF(box.left() + 8, box.top() + 20, box.width() - 16, 16), Qt.AlignLeft | Qt.AlignVCenter, value)
+
+    def _draw_note(self, painter: QPainter, geo: dict) -> None:
+        note = self.PLANT_NOTES.get(self.plant_slug)
+        if not note:
+            return
+        rect = geo["rect"]
+        note_top = self._footer_top(geo) + (108 if self._outputs else 0)
+        note_box = QRectF(rect.left(), note_top, min(rect.width(), 860), 40)
+        painter.setPen(QPen(QColor("#d6dbdf"), 1))
+        painter.setBrush(QColor(255, 255, 255, 226))
+        painter.drawRoundedRect(note_box, 7, 7)
+        painter.setPen(QColor(C_TEXT))
+        font = QFont()
+        font.setPointSize(8)
+        font.setBold(True)
+        painter.setFont(font)
+        painter.drawText(note_box.adjusted(9, 4, -9, -4), Qt.AlignLeft | Qt.AlignVCenter | Qt.TextWordWrap, note)
+
+    def _footer_top(self, geo: dict) -> float:
+        bottoms = [lane.bottom() for _, lane in geo.get("lanes", [])]
+        bottoms.extend(box.bottom() for box in geo.get("unit_rects", {}).values())
+        content_bottom = max(bottoms) if bottoms else geo["rect"].top() + 120
+        return content_bottom + 18
+
+
+PlantProcessDiagram = PlantProcessOverview
 
 
 class PlantsScreen(QWidget):
@@ -256,6 +1348,7 @@ class PlantDetailPanel(QWidget):
         self._calibrate_btn = None
         self._import_worker = None
         self._calibration_worker = None
+        self._overview = None
         self._debounce = QTimer()
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(120)
@@ -275,6 +1368,12 @@ class PlantDetailPanel(QWidget):
         root.addLayout(self._build_profile_row())
         if self.plant.slug == "daspoort":
             root.addWidget(self._panel("Daspoort Data Import & Calibration", self._build_calibration_tools()))
+
+        self._overview = PlantProcessOverview(self.plant, self.units, self.sampling_points)
+        root.addWidget(self._panel(
+            "Animated Plant Process Overview",
+            self._overview,
+        ))
 
         tables_row = QHBoxLayout()
         tables_row.setSpacing(10)
@@ -627,7 +1726,7 @@ class PlantDetailPanel(QWidget):
         self._bnr_mode = QComboBox()
         self._bnr_mode.addItems(BNR_MODES)
         self._bnr_mode.setStyleSheet(self._combo_style())
-        self._bnr_mode.currentIndexChanged.connect(lambda _: self._debounce.start())
+        self._bnr_mode.currentIndexChanged.connect(self._on_bnr_mode_changed)
         if self.plant.slug != "zeekoegat":
             self._bnr_mode.setEnabled(False)
         controls.addWidget(QLabel("BNR mode"))
@@ -646,6 +1745,11 @@ class PlantDetailPanel(QWidget):
         run_btn.clicked.connect(self._run)
         layout.addWidget(run_btn)
         return w
+
+    def _on_bnr_mode_changed(self, _index=None) -> None:
+        if self._overview:
+            self._overview.set_bnr_mode(self._bnr_mode.currentText())
+        self._debounce.start()
 
     def _build_outputs(self) -> QWidget:
         w = QWidget()
@@ -756,7 +1860,10 @@ class PlantDetailPanel(QWidget):
             bnr_mode=self._bnr_mode.currentText(),
             calibration_factors=self._calibration_factors,
         )
-        self._update_results(inputs, run_plant_twin(inputs))
+        outputs = run_plant_twin(inputs)
+        if self._overview:
+            self._overview.set_results(inputs, outputs)
+        self._update_results(inputs, outputs)
 
     def _update_results(self, inputs: PlantTwinInputs, outputs: PlantTwinOutputs) -> None:
         self._result_labels["cod"].setText(f"{outputs.cod_removal_pct:.1f}%")

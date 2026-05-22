@@ -203,6 +203,77 @@ and fate of chemicals in wastewater treatment.</div>
 """)),
 
     # ── 3 ─────────────────────────────────────────────────────────────────────
+    ("Real Plant Scientific Twins", _html("""
+<h2>Real Plant Scientific Twins</h2>
+<p>The <b>Plants</b> page adds process-realistic Scientific Twins for selected
+South African wastewater treatment plants. These pages do not replace the lab
+reactor workflow; they let you compare lab-scale reactor behaviour with full
+plant treatment trains using the same mass-balance thinking.</p>
+
+<div class="warn"><b>Realism level:</b> V1 is a Scientific Twin, not a live
+SCADA replica. Process layout, sampling order, HRT, SRT, MLSS, recycle logic,
+pond retention, trickling-filter loading, and PFAS fate are modelled
+scientifically. Exact day-by-day plant performance needs monitoring, sludge,
+influent, effluent, and operations data for calibration.</div>
+
+<h3>Plants Included in V1</h3>
+<table>
+  <tr><th>Plant</th><th>Process family</th><th>Visual process path</th></tr>
+  <tr>
+    <td><b>Daspoort</b></td>
+    <td>BNR activated sludge with heritage trickling-filter research context</td>
+    <td>Inlet works → PSTs → anaerobic selector → anoxic reactor → aerobic reactor → SSTs → disinfection → sludge digestion/drying beds. Heritage trickling filters are included as a research note for anammox/fixed-film interpretation.</td>
+  </tr>
+  <tr>
+    <td><b>Zeekoegat</b></td>
+    <td>Flexible BNR activated sludge</td>
+    <td>Inlet works → balancing → anaerobic/anoxic/aerobic zones → SSTs → tertiary treatment → disinfection → sludge handling. BNR mode controls represent A2O/Bardenpho, UCT, Modified UCT, and Johannesburg configurations.</td>
+  </tr>
+  <tr>
+    <td><b>Phola</b></td>
+    <td>PETRO pond plus trickling-filter system</td>
+    <td>Screens → vortex degritters → anaerobic ponds → trickling filter → humus tanks → disinfection → reed bed → discharge, with drying beds for sludge handling.</td>
+  </tr>
+</table>
+
+<h3>Animated Visual Process Screen</h3>
+<p>Each plant tab contains a large animated process overview. Treatment units
+are drawn in clear hydraulic order, main water flow uses solid arrows, sludge
+and PFAS-solids paths use separate coloured arrows, and sampling points pulse
+after the relevant unit. Daspoort and Zeekoegat use BNR process lanes; Phola
+uses pond, biofilm, humus, disinfection, reed-bed, and sludge-drying lanes.
+Daspoort trickling-filter/anammox information is shown as dashed research
+context, not as a normal mainline process step.</p>
+
+<h3>Sampling, Import, and Calibration</h3>
+<ul>
+  <li><b>Sampling map:</b> SP1 represents influent or plant feed; SP4 represents final effluent. Intermediate points show plant-specific process checkpoints.</li>
+  <li><b>Monitoring readings:</b> Plant monitoring data can store flow, COD, NH₄, TN, TP, pH, temperature, DO, MLSS, SRT, HRT, CEC name, concentration, detection limit, and below-detection flags.</li>
+  <li><b>Daspoort calibration:</b> CSV/Excel import and calibration run in background threads so the interface stays responsive during larger files.</li>
+  <li><b>Confidence labels:</b> Results are labelled as literature/default, partly calibrated, or calibrated depending on the data available.</li>
+</ul>
+
+<h3>Scientific Model Backbone</h3>
+<p>The plant model uses mechanistic mass balance: influent load, unit-by-unit
+load, effluent load, sludge/solids load, removal percentage, and unresolved or
+transformed fraction. Activated-sludge/BNR modules are used for Daspoort and
+Zeekoegat. Pond plus trickling-filter logic is used for Phola.</p>
+
+<h3>PFAS Fate</h3>
+<p>PFAS is treated conservatively. The model does not assume biological
+destruction. It estimates water-phase passage, adsorption to sludge or captured
+solids, and unresolved uncertainty. A PFAS removal number therefore means
+transfer out of water, not environmental destruction.</p>
+
+<h3>Lab Reactor vs Real Plants</h3>
+<p>Use normalized operating variables to compare scale-up behaviour:
+<b>HRT</b>, <b>SRT</b>, <b>F:M</b>, <b>MLSS</b>, <b>DO</b>, <b>pH</b>,
+<b>temperature</b>, <b>recycle ratio</b>, <b>organic loading</b>, and
+<b>nitrogen loading</b>. Measured plant data should override literature
+defaults whenever available.</p>
+""")),
+
+    # ── 3 ─────────────────────────────────────────────────────────────────────
     ("Key Equations", _html("""
 <h2>Key Scientific Equations</h2>
 <p>All equations are implemented in <code>core/calculations.py</code> and

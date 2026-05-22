@@ -2,7 +2,7 @@
 ; digital_reactor.iss — Inno Setup 6 installer script for Digital Reactor
 ;
 ; Prerequisites:
-;   1. Run PyInstaller first:   pyinstaller digital_reactor.spec --noconfirm
+;   1. Run the build script:    build.bat  (uses Nuitka for compilation)
 ;   2. Confirm dist\DigitalReactor\DigitalReactor.exe exists
 ;   3. Compile this script:     ISCC installer\digital_reactor.iss
 ;      (or open in Inno Setup IDE and press F9)
@@ -87,9 +87,9 @@ Source: "vc_redist.x64.exe"; \
   DestDir: "{tmp}"; \
   Flags: deleteafterinstall
 
-; Copy the entire PyInstaller dist folder, preserving sub-directory structure.
+; Copy the entire Nuitka dist folder, preserving sub-directory structure.
 ; "ignoreversion" prevents Inno Setup from comparing file versions on update —
-; PyInstaller bundles don't embed proper version metadata in every DLL.
+; Nuitka-compiled bundles do not embed standard version metadata in every DLL.
 Source: "{#SourceDir}\*"; \
   DestDir: "{app}"; \
   Flags: ignoreversion recursesubdirs createallsubdirs
