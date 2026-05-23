@@ -16,7 +16,7 @@ All sliders are connected live — results update instantly without
 needing to click Run (Run also saves the scenario to the database).
 """
 
-from datetime import datetime
+from datetime import datetime, date as dt_date
 
 import qtawesome as qta
 from PySide6.QtWidgets import (
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QLabel, QSlider, QDoubleSpinBox, QComboBox, QPushButton,
     QFrame, QSizePolicy, QSplitter, QTableWidget,
     QTableWidgetItem, QHeaderView, QAbstractItemView, QMessageBox,
+    QScrollArea,
 )
 from PySide6.QtCore import Qt, QSize, QTimer, QThread, Signal
 from PySide6.QtGui import QFont, QColor, QBrush
@@ -31,14 +32,18 @@ from PySide6.QtCharts import (
     QChart, QChartView, QBarSeries, QBarSet, QBarCategoryAxis, QValueAxis,
 )
 
-from simulation.generic_model import SimInputs, SimOutputs, run_phase1
+from simulation.generic_model import (
+    SimInputs, SimOutputs, run_phase1,
+    PFAS_COMPOUND_LIST, PFAS_COMPOUND_CHAIN_TYPE,
+)
 from simulation.data_model import (
     run_phase2, get_model_status, train_phase2,
     MAIN_MODEL_THRESHOLD,
 )
 import simulation.data_model as _dm
 from core.database import get_session
-from core.models import SimulationRun
+from core.models import SimulationRun, Experiment, DailyReading, FlowReading
+from core.calculations import calc_actual_srt
 
 C_HDR = "#2c3e50"
 
@@ -125,6 +130,21 @@ class SimulationScreen(QWidget):
         self._model_selector.currentIndexChanged.connect(self._on_model_changed)
         row.addWidget(model_lbl)
         row.addWidget(self._model_selector)
+
+        load_btn = QPushButton("  Load Today")
+        load_btn.setIcon(qta.icon("fa6s.database", color="#fff"))
+        load_btn.setIconSize(QSize(13, 13))
+        load_btn.setFixedHeight(34)
+        load_btn.setCursor(Qt.PointingHandCursor)
+        load_btn.setToolTip("Pre-fill inputs from today's logged readings")
+        load_btn.setStyleSheet("""
+            QPushButton { background:#16a085; color:#fff; border:none;
+                border-radius:4px; font-size:11px; font-weight:600; padding:0 14px; }
+            QPushButton:hover { background:#1abc9c; }
+            QPushButton:pressed { background:#0e8070; }
+        """)
+        load_btn.clicked.connect(self._load_today_data)
+        row.addWidget(load_btn)
 
         save_btn = QPushButton("  Save Scenario")
         save_btn.setIcon(qta.icon("fa6s.floppy-disk", color="#fff"))
@@ -392,20 +412,105 @@ class SimulationScreen(QWidget):
         layout.addLayout(conc_grid)
 
         # ── PFAS type ──────────────────────────────────────────────────────────
+        # ── PFAS compound + chain type ─────────────────────────────────────────
         pfas_row = QHBoxLayout()
-        pfas_lbl = QLabel("PFAS chain type:")
+        pfas_lbl = QLabel("PFAS compound:")
         pfas_lbl.setStyleSheet("color:#2c3e50; font-size:11px; font-weight:600;")
-        self._pfas_type = QComboBox()
-        self._pfas_type.addItems(["short-chain", "long-chain"])
-        self._pfas_type.setFixedHeight(30)
-        self._pfas_type.setStyleSheet("""
+        pfas_lbl.setFixedWidth(105)
+
+        self._pfas_compound = QComboBox()
+        for label, _ in PFAS_COMPOUND_LIST:
+            self._pfas_compound.addItem(label)
+        self._pfas_compound.setFixedHeight(30)
+        self._pfas_compound.setStyleSheet("""
             QComboBox { border:1px solid #ced4da; border-radius:4px;
                 padding:4px 8px; font-size:11px; background:#fff; }
         """)
-        self._pfas_type.currentIndexChanged.connect(lambda _: self._debounce.start())
+        self._pfas_compound.currentIndexChanged.connect(self._on_pfas_compound_changed)
         pfas_row.addWidget(pfas_lbl)
-        pfas_row.addWidget(self._pfas_type, stretch=1)
+        pfas_row.addWidget(self._pfas_compound, stretch=1)
         layout.addLayout(pfas_row)
+
+        chain_row = QHBoxLayout()
+        chain_lbl = QLabel("Chain type:")
+        chain_lbl.setStyleSheet("color:#636e72; font-size:10px;")
+        chain_lbl.setFixedWidth(105)
+        self._pfas_type = QComboBox()
+        self._pfas_type.addItems(["short-chain", "long-chain"])
+        self._pfas_type.setFixedHeight(26)
+        self._pfas_type.setStyleSheet("""
+            QComboBox { border:1px solid #ced4da; border-radius:4px;
+                padding:2px 8px; font-size:10px; background:#f8f9fa; color:#636e72; }
+        """)
+        self._pfas_type.currentIndexChanged.connect(lambda _: self._debounce.start())
+        chain_row.addWidget(chain_lbl)
+        chain_row.addWidget(self._pfas_type, stretch=1)
+        layout.addLayout(chain_row)
+
+        layout.addWidget(self._make_divider())
+
+        # ── Target Finder (collapsible) ────────────────────────────────────────
+        self._target_toggle = QPushButton("▶  Target Finder — find conditions for a removal goal")
+        self._target_toggle.setCheckable(True)
+        self._target_toggle.setChecked(False)
+        self._target_toggle.setCursor(Qt.PointingHandCursor)
+        self._target_toggle.setFixedHeight(26)
+        self._target_toggle.setStyleSheet("""
+            QPushButton { background:#dfe6e9; color:#2c3e50; border:none;
+                text-align:left; padding:0 10px; font-size:10px; font-weight:600; }
+            QPushButton:checked { background:#d5eaf9; }
+            QPushButton:hover   { background:#d5eaf9; }
+        """)
+        self._target_toggle.toggled.connect(self._on_target_toggle)
+        layout.addWidget(self._target_toggle)
+
+        self._target_panel = QWidget()
+        self._target_panel.setVisible(False)
+        self._target_panel.setStyleSheet("background:#f8f9fa; border:1px solid #dde1e7; border-radius:4px;")
+        tp = QGridLayout(self._target_panel)
+        tp.setContentsMargins(10, 8, 10, 8)
+        tp.setSpacing(6)
+
+        tp.addWidget(self._small_lbl("Target parameter:"), 0, 0)
+        self._target_param = QComboBox()
+        self._target_param.addItems(["PFAS removal %", "COD removal %", "NH₄ removal %", "TP removal %"])
+        self._target_param.setFixedHeight(26)
+        self._target_param.setStyleSheet(self._spin_style())
+        tp.addWidget(self._target_param, 0, 1)
+
+        tp.addWidget(self._small_lbl("Target value (%):"), 1, 0)
+        self._target_pct = QDoubleSpinBox()
+        self._target_pct.setRange(1.0, 99.0)
+        self._target_pct.setValue(60.0)
+        self._target_pct.setDecimals(1)
+        self._target_pct.setFixedHeight(26)
+        self._target_pct.setStyleSheet(self._spin_style())
+        tp.addWidget(self._target_pct, 1, 1)
+
+        tp.addWidget(self._small_lbl("Solve for:"), 2, 0)
+        self._solve_for = QComboBox()
+        self._solve_for.addItems(["SRT (days)", "MLSS (mg/L)", "DO (mg/L)", "Flow (mL/h)"])
+        self._solve_for.setFixedHeight(26)
+        self._solve_for.setStyleSheet(self._spin_style())
+        tp.addWidget(self._solve_for, 2, 1)
+
+        find_btn = QPushButton("Find Conditions")
+        find_btn.setFixedHeight(28)
+        find_btn.setCursor(Qt.PointingHandCursor)
+        find_btn.setStyleSheet("""
+            QPushButton { background:#2980b9; color:#fff; border:none;
+                border-radius:4px; font-size:10px; font-weight:600; padding:0 10px; }
+            QPushButton:hover { background:#3498db; }
+        """)
+        find_btn.clicked.connect(self._find_target)
+        tp.addWidget(find_btn, 3, 0)
+
+        self._target_result = QLabel("—")
+        self._target_result.setStyleSheet(
+            "color:#2c3e50; font-size:11px; font-weight:600; padding:2px 6px;"
+        )
+        tp.addWidget(self._target_result, 3, 1)
+        layout.addWidget(self._target_panel)
 
         layout.addStretch()
         return card
@@ -542,6 +647,50 @@ class SimulationScreen(QWidget):
         self._hrt_label.setStyleSheet("color:#7f8c8d; font-size:10px; padding:2px 0;")
         layout.addWidget(self._hrt_label)
 
+        layout.addWidget(self._make_divider())
+
+        # ── Saved Scenarios (collapsible) ─────────────────────────────────────
+        self._scenarios_toggle = QPushButton("▶  Saved Scenarios")
+        self._scenarios_toggle.setCheckable(True)
+        self._scenarios_toggle.setChecked(False)
+        self._scenarios_toggle.setCursor(Qt.PointingHandCursor)
+        self._scenarios_toggle.setFixedHeight(26)
+        self._scenarios_toggle.setStyleSheet("""
+            QPushButton { background:#dfe6e9; color:#2c3e50; border:none;
+                text-align:left; padding:0 10px; font-size:10px; font-weight:600; }
+            QPushButton:checked { background:#d5eaf9; }
+            QPushButton:hover   { background:#d5eaf9; }
+        """)
+        self._scenarios_toggle.toggled.connect(self._on_scenarios_toggle)
+        layout.addWidget(self._scenarios_toggle)
+
+        self._scenarios_panel = QWidget()
+        self._scenarios_panel.setVisible(False)
+        sp_layout = QVBoxLayout(self._scenarios_panel)
+        sp_layout.setContentsMargins(0, 4, 0, 0)
+        sp_layout.setSpacing(0)
+
+        self._scenarios_table = QTableWidget(0, 7)
+        self._scenarios_table.setHorizontalHeaderLabels(
+            ["Date", "SRT\nd", "DO\nmg/L", "MLSS\nmg/L", "PFAS\n%", "COD\n%", "NH₄\n%"]
+        )
+        self._scenarios_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for c in range(1, 7):
+            self._scenarios_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+        self._scenarios_table.verticalHeader().setVisible(False)
+        self._scenarios_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._scenarios_table.setFixedHeight(180)
+        self._scenarios_table.setShowGrid(False)
+        self._scenarios_table.setStyleSheet("""
+            QTableWidget { background:#fff; border:1px solid #dde1e7;
+                border-radius:4px; font-size:10px; }
+            QHeaderView::section { background:#2c3e50; color:#ecf0f1;
+                font-weight:bold; font-size:9px; padding:4px 2px; border:none; }
+            QTableWidget::item { padding:3px 4px; }
+        """)
+        sp_layout.addWidget(self._scenarios_table)
+        layout.addWidget(self._scenarios_panel)
+
         return card
 
     def _build_gauge(self, key: str, label: str, color: str) -> QWidget:
@@ -612,6 +761,7 @@ class SimulationScreen(QWidget):
     def _get_inputs(self) -> SimInputs:
         """Read all current slider and spinbox values into a SimInputs object."""
         s = self._sliders
+        compound_key = PFAS_COMPOUND_LIST[self._pfas_compound.currentIndex()][1]
         return SimInputs(
             flow_rate_mlh = s["flow_rate"].value() * 0.1,
             do_mgl        = s["do"].value()         * 0.1,
@@ -625,6 +775,7 @@ class SimulationScreen(QWidget):
             inf_tp        = self._inf_spins["inf_tp"].value(),
             inf_pfas      = self._inf_spins["inf_pfas"].value(),
             pfas_type     = self._pfas_type.currentText(),
+            pfas_compound = compound_key,
         )
 
     def _recalculate(self) -> None:
@@ -672,10 +823,11 @@ class SimulationScreen(QWidget):
         self._bar_set.replace(3, out.pfas_removal_pct)
 
         # HRT info
+        compound_tag = f" ({inp.pfas_compound})" if inp.pfas_compound else " (class avg)"
         self._hrt_label.setText(
             f"HRT: {out.hrt_days:.2f} days  |  "
-            f"Kd used: {out.kd_used} L/kg  |  "
-            f"PFAS type: {inp.pfas_type}"
+            f"Kd: {out.kd_used} L/kg{compound_tag}  |  "
+            f"{inp.pfas_type}"
         )
 
         # Warnings
@@ -685,6 +837,198 @@ class SimulationScreen(QWidget):
             self._warnings_label.setVisible(True)
         else:
             self._warnings_label.setVisible(False)
+
+    # ── PFAS compound selector ─────────────────────────────────────────────────
+    def _on_pfas_compound_changed(self, index: int) -> None:
+        """Auto-set chain type when a specific compound is selected."""
+        key = PFAS_COMPOUND_LIST[index][1]
+        if key in PFAS_COMPOUND_CHAIN_TYPE:
+            chain = PFAS_COMPOUND_CHAIN_TYPE[key]
+            self._pfas_type.setCurrentText(chain)
+        self._debounce.start()
+
+    # ── Load today's data ──────────────────────────────────────────────────────
+    def _set_slider_val(self, key: str, actual: float, scale: float) -> None:
+        """Set a slider from a real-world value (reverse the scale factor)."""
+        slider = self._sliders.get(key)
+        if slider is None:
+            return
+        int_val = int(round(actual / scale))
+        int_val = max(slider.minimum(), min(slider.maximum(), int_val))
+        slider.setValue(int_val)
+
+    def _load_today_data(self) -> None:
+        """Pre-fill all inputs from today's logged readings for the active experiment."""
+        try:
+            with get_session() as session:
+                active = session.query(Experiment).filter_by(is_active=True).first()
+                if not active:
+                    QMessageBox.information(
+                        self, "No Active Experiment",
+                        "No active experiment found.\nCreate one in the Experiments screen first."
+                    )
+                    return
+
+                today = dt_date.today()
+                flow = (session.query(FlowReading)
+                        .filter_by(experiment_id=active.id, reading_date=today).first())
+                aer = (session.query(DailyReading)
+                       .filter_by(experiment_id=active.id, reading_date=today, zone="aeration").first())
+                pst = (session.query(DailyReading)
+                       .filter_by(experiment_id=active.id, reading_date=today, zone="primary_settling").first())
+
+            filled = []
+
+            if flow:
+                if flow.q_in_mlh:
+                    self._set_slider_val("flow_rate", flow.q_in_mlh, 0.1)
+                    filled.append("flow rate")
+                if flow.ras_ratio:
+                    self._set_slider_val("ras", flow.ras_ratio, 0.1)
+                    filled.append("RAS ratio")
+                if aer and aer.mlss_mgl and flow.q_was_mlh:
+                    srt = calc_actual_srt(aer.mlss_mgl, flow.q_was_mlh)
+                    if srt > 0:
+                        self._set_slider_val("srt", srt, 1.0)
+                        filled.append("SRT")
+
+            if aer:
+                if aer.do_mgl is not None:
+                    self._set_slider_val("do", aer.do_mgl, 0.1)
+                    filled.append("DO")
+                if aer.temperature_c is not None:
+                    self._set_slider_val("temp", aer.temperature_c, 0.1)
+                    filled.append("temperature")
+                if aer.ph is not None:
+                    self._set_slider_val("ph", aer.ph, 0.1)
+                    filled.append("pH")
+                if aer.mlss_mgl is not None:
+                    self._set_slider_val("mlss", aer.mlss_mgl, 1.0)
+                    filled.append("MLSS")
+
+            if pst:
+                if pst.cod_mgl is not None:
+                    self._inf_spins["inf_cod"].setValue(pst.cod_mgl)
+                    filled.append("influent COD")
+                if pst.nh4_mgl is not None:
+                    self._inf_spins["inf_nh4"].setValue(pst.nh4_mgl)
+                    filled.append("influent NH₄")
+                if pst.tp_mgl is not None:
+                    self._inf_spins["inf_tp"].setValue(pst.tp_mgl)
+                    filled.append("influent TP")
+
+            if not filled:
+                QMessageBox.information(
+                    self, "No Data for Today",
+                    "No readings found for today in the active experiment.\n"
+                    "Log today's data in the Daily Log screen first."
+                )
+            else:
+                self._debounce.start()
+
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Error", str(exc))
+
+    # ── Target Finder ──────────────────────────────────────────────────────────
+    def _on_target_toggle(self, checked: bool) -> None:
+        self._target_panel.setVisible(checked)
+        arrow = "▼" if checked else "▶"
+        self._target_toggle.setText(f"{arrow}  Target Finder — find conditions for a removal goal")
+
+    def _find_target(self) -> None:
+        """Use bisection to find the operating condition that meets a removal target."""
+        param_map = {
+            "PFAS removal %": "pfas_removal_pct",
+            "COD removal %":  "cod_removal_pct",
+            "NH₄ removal %":  "nh4_removal_pct",
+            "TP removal %":   "tp_removal_pct",
+        }
+        solve_map = {
+            "SRT (days)":  ("srt_days",      5.0,    60.0,   1.0,   "d"),
+            "MLSS (mg/L)": ("mlss_mgl",      500.0,  10000.0, 1.0,  "mg/L"),
+            "DO (mg/L)":   ("do_mgl",        0.1,    5.0,    0.1,   "mg/L"),
+            "Flow (mL/h)": ("flow_rate_mlh", 100.0,  500.0,  0.1,   "mL/h"),
+        }
+
+        attr   = param_map[self._target_param.currentText()]
+        goal   = self._target_pct.value()
+        field, lo, hi, scale, unit = solve_map[self._solve_for.currentText()]
+        slider_key = {"srt_days": "srt", "mlss_mgl": "mlss",
+                      "do_mgl": "do", "flow_rate_mlh": "flow_rate"}.get(field)
+
+        import dataclasses
+        base = self._get_inputs()
+
+        def _residual(x: float) -> float:
+            inp = dataclasses.replace(base, **{field: x})
+            out = run_phase1(inp)
+            return getattr(out, attr) - goal
+
+        # Check feasibility at the bounds
+        r_lo = _residual(lo)
+        r_hi = _residual(hi)
+        if r_lo * r_hi > 0:
+            if abs(r_hi) < abs(r_lo):
+                self._target_result.setText(
+                    f"Max achievable: {getattr(run_phase1(dataclasses.replace(base, **{field: hi})), attr):.1f}%"
+                )
+            else:
+                self._target_result.setText("Not achievable in valid range")
+            return
+
+        # Bisection (50 iterations ≈ 32 billion-fold precision)
+        for _ in range(50):
+            mid = (lo + hi) / 2.0
+            if (hi - lo) < (scale * 0.1):
+                break
+            if _residual(lo) * _residual(mid) <= 0:
+                hi = mid
+            else:
+                lo = mid
+        solution = (lo + hi) / 2.0
+
+        self._target_result.setText(f"➜  {field.replace('_', ' ').title()}: {solution:.1f} {unit}")
+
+        # Apply the solution to the slider so the user can see it live
+        if slider_key:
+            self._set_slider_val(slider_key, solution, scale)
+            self._debounce.start()
+
+    # ── Saved Scenarios ────────────────────────────────────────────────────────
+    def _on_scenarios_toggle(self, checked: bool) -> None:
+        self._scenarios_panel.setVisible(checked)
+        arrow = "▼" if checked else "▶"
+        self._scenarios_toggle.setText(f"{arrow}  Saved Scenarios")
+        if checked:
+            self._refresh_scenarios()
+
+    def _refresh_scenarios(self) -> None:
+        """Load the 10 most recent saved scenarios from the database."""
+        try:
+            with get_session() as session:
+                rows = (session.query(SimulationRun)
+                        .order_by(SimulationRun.run_date.desc())
+                        .limit(10).all())
+            self._scenarios_table.setRowCount(len(rows))
+            for r, run in enumerate(rows):
+                dt_str = str(run.run_date)[:16] if run.run_date else "—"
+                cells = [
+                    dt_str,
+                    f"{run.srt_days:.0f}" if run.srt_days else "—",
+                    f"{run.do_mgl:.1f}"   if run.do_mgl   else "—",
+                    f"{run.flow_rate_mlh:.0f}" if run.flow_rate_mlh else "—",
+                    f"{run.pred_pfas_removal:.1f}" if run.pred_pfas_removal else "—",
+                    f"{run.pred_cod_removal:.1f}"  if run.pred_cod_removal  else "—",
+                    f"{run.pred_nh4_removal:.1f}"  if run.pred_nh4_removal  else "—",
+                ]
+                for c, text in enumerate(cells):
+                    item = QTableWidgetItem(text)
+                    item.setTextAlignment(Qt.AlignCenter)
+                    item.setFlags(Qt.ItemIsEnabled)
+                    self._scenarios_table.setItem(r, c, item)
+                self._scenarios_table.setRowHeight(r, 28)
+        except Exception:
+            pass
 
     # ── Save scenario ──────────────────────────────────────────────────────────
     def _save_scenario(self) -> None:
@@ -726,6 +1070,8 @@ class SimulationScreen(QWidget):
         QMessageBox.information(self, "Saved",
             "Scenario saved to the database.\n"
             "You can compare it with real data in the Comparison screen.")
+        if self._scenarios_toggle.isChecked():
+            self._refresh_scenarios()
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
     def showEvent(self, event) -> None:
@@ -773,9 +1119,17 @@ class SimulationScreen(QWidget):
         return d
 
     @staticmethod
+    def _small_lbl(text: str) -> QLabel:
+        lbl = QLabel(text)
+        lbl.setStyleSheet("color:#2c3e50; font-size:10px; font-weight:600; background:transparent;")
+        return lbl
+
+    @staticmethod
     def _spin_style() -> str:
         return """
             QDoubleSpinBox { border:1px solid #ced4da; border-radius:4px;
                 padding:2px 6px; font-size:11px; background:#fff; color:#2c3e50; }
             QDoubleSpinBox:focus { border-color:#2980b9; }
+            QComboBox { border:1px solid #ced4da; border-radius:4px;
+                padding:2px 6px; font-size:10px; background:#fff; color:#2c3e50; }
         """

@@ -37,6 +37,7 @@ from core.plant_calibration import (
 from simulation.plant_model import (
     BNR_MODES, PlantTwinInputs, PlantTwinOutputs, run_plant_twin,
 )
+from simulation.generic_model import PFAS_COMPOUND_LIST, PFAS_COMPOUND_CHAIN_TYPE
 
 
 C_HDR = "#2c3e50"
@@ -1712,10 +1713,24 @@ class PlantDetailPanel(QWidget):
 
         layout.addLayout(grid)
 
+        # ── PFAS compound + chain type ─────────────────────────────────────────
+        compound_row = QHBoxLayout()
+        compound_row.setSpacing(6)
+        compound_lbl = QLabel("PFAS compound")
+        compound_lbl.setStyleSheet(f"color:{C_TEXT}; font-size:10px; font-weight:600;")
+        self._pfas_compound = QComboBox()
+        for label, _ in PFAS_COMPOUND_LIST:
+            self._pfas_compound.addItem(label)
+        self._pfas_compound.setStyleSheet(self._combo_style())
+        self._pfas_compound.currentIndexChanged.connect(self._on_pfas_compound_changed)
+        compound_row.addWidget(compound_lbl)
+        compound_row.addWidget(self._pfas_compound, stretch=1)
+        layout.addLayout(compound_row)
+
         controls = QHBoxLayout()
         controls.setSpacing(8)
-        pfas_lbl = QLabel("PFAS type")
-        pfas_lbl.setStyleSheet(f"color:{C_TEXT}; font-size:10px; font-weight:600;")
+        pfas_lbl = QLabel("Chain type")
+        pfas_lbl.setStyleSheet(f"color:{C_MUTED}; font-size:10px;")
         self._pfas_type = QComboBox()
         self._pfas_type.addItems(["short-chain", "long-chain"])
         self._pfas_type.setStyleSheet(self._combo_style())
@@ -1723,33 +1738,110 @@ class PlantDetailPanel(QWidget):
         controls.addWidget(pfas_lbl)
         controls.addWidget(self._pfas_type)
 
+        bnr_lbl = QLabel("BNR mode")
+        bnr_lbl.setStyleSheet(f"color:{C_TEXT}; font-size:10px; font-weight:600;")
         self._bnr_mode = QComboBox()
         self._bnr_mode.addItems(BNR_MODES)
         self._bnr_mode.setStyleSheet(self._combo_style())
         self._bnr_mode.currentIndexChanged.connect(self._on_bnr_mode_changed)
-        if self.plant.slug != "zeekoegat":
+        # Phola uses pond/trickling filter — BNR mode not applicable
+        if self.plant.slug == "phola":
             self._bnr_mode.setEnabled(False)
-        controls.addWidget(QLabel("BNR mode"))
+        controls.addWidget(bnr_lbl)
         controls.addWidget(self._bnr_mode, stretch=1)
         layout.addLayout(controls)
 
+        # ── Load Latest Data button ────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        load_btn = QPushButton("  Load Latest Monitoring Data")
+        load_btn.setIcon(qta.icon("fa6s.database", color="#ffffff"))
+        load_btn.setFixedHeight(30)
+        load_btn.setCursor(Qt.PointingHandCursor)
+        load_btn.setToolTip("Pre-fill inputs from the most recently imported SP1 monitoring row")
+        load_btn.setStyleSheet("""
+            QPushButton { background:#16a085; color:#fff; border:none;
+                border-radius:4px; font-size:10px; font-weight:600; padding:0 10px; }
+            QPushButton:hover { background:#1abc9c; }
+        """)
+        load_btn.clicked.connect(self._load_monitoring_data)
+        btn_row.addWidget(load_btn, stretch=1)
+
         run_btn = QPushButton("  Run Scientific Twin")
         run_btn.setIcon(qta.icon("fa6s.play", color="#ffffff"))
-        run_btn.setFixedHeight(34)
+        run_btn.setFixedHeight(30)
         run_btn.setCursor(Qt.PointingHandCursor)
         run_btn.setStyleSheet("""
             QPushButton { background:#8e44ad; color:#fff; border:none;
-                border-radius:4px; font-size:11px; font-weight:600; padding:0 14px; }
+                border-radius:4px; font-size:10px; font-weight:600; padding:0 10px; }
             QPushButton:hover { background:#9b59b6; }
         """)
         run_btn.clicked.connect(self._run)
-        layout.addWidget(run_btn)
+        btn_row.addWidget(run_btn, stretch=1)
+        layout.addLayout(btn_row)
         return w
 
     def _on_bnr_mode_changed(self, _index=None) -> None:
         if self._overview:
             self._overview.set_bnr_mode(self._bnr_mode.currentText())
         self._debounce.start()
+
+    def _on_pfas_compound_changed(self, index: int) -> None:
+        """Auto-set chain type when a specific compound is chosen."""
+        key = PFAS_COMPOUND_LIST[index][1]
+        if key in PFAS_COMPOUND_CHAIN_TYPE:
+            self._pfas_type.setCurrentText(PFAS_COMPOUND_CHAIN_TYPE[key])
+        self._debounce.start()
+
+    def _load_monitoring_data(self) -> None:
+        """Pre-fill inputs from the most recently imported SP1 monitoring row."""
+        try:
+            with get_session() as session:
+                # Most recent conventional (non-CEC) influent row for this plant
+                latest = (
+                    session.query(PlantMonitoringReading)
+                    .filter_by(plant_id=self.plant.id, sampling_point_code="SP1_influent")
+                    .filter(PlantMonitoringReading.cec_name.is_(None))
+                    .order_by(PlantMonitoringReading.sampling_date.desc())
+                    .first()
+                )
+
+            if not latest:
+                QMessageBox.information(
+                    self, "No Monitoring Data",
+                    "No imported monitoring data found for this plant.\n"
+                    "Use the Import button to load a CSV or Excel file first."
+                )
+                return
+
+            field_map = {
+                "flow_mld":       latest.flow_mld,
+                "hrt_hours":      latest.hrt_hours,
+                "srt_days":       latest.srt_days,
+                "mlss_mgl":       latest.mlss_mgl,
+                "do_mgl":         latest.do_mgl,
+                "temp_c":         latest.temperature_c,
+                "ph":             latest.ph,
+                "recycle_ratio":  latest.recycle_ratio,
+                "inf_cod_mgl":    latest.cod_mgl,
+                "inf_nh4_mgl":    latest.nh4_mgl,
+                "inf_tn_mgl":     latest.tn_mgl,
+                "inf_tp_mgl":     latest.tp_mgl,
+            }
+            filled = []
+            for key, value in field_map.items():
+                if value is not None and key in self._inputs:
+                    spin = self._inputs[key]
+                    clamped = max(spin.minimum(), min(spin.maximum(), float(value)))
+                    spin.setValue(clamped)
+                    filled.append(key.replace("_", " "))
+
+            if filled:
+                self._debounce.start()
+
+        except Exception as exc:
+            QMessageBox.critical(self, "Load Error", str(exc))
 
     def _build_outputs(self) -> QWidget:
         w = QWidget()
@@ -1857,6 +1949,7 @@ class PlantDetailPanel(QWidget):
             inf_tp_mgl=self._inputs["inf_tp_mgl"].value(),
             inf_pfas_ugl=self._inputs["inf_pfas_ugl"].value(),
             pfas_type=self._pfas_type.currentText(),
+            pfas_compound=PFAS_COMPOUND_LIST[self._pfas_compound.currentIndex()][1],
             bnr_mode=self._bnr_mode.currentText(),
             calibration_factors=self._calibration_factors,
         )

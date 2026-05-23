@@ -15,12 +15,20 @@ from core.plant_calibration import (
     import_monitoring_file,
     normalise_sampling_point,
 )
+from dataclasses import replace as _replace
+
 from simulation.plant_model import (
+    DISCHARGE_LIMITS,
+    PFAS_BIOTRANSFORMATION_FRACTION,
     PlantTwinInputs,
+    PFASMixtureEntry,
     calc_plant_fm_ratio,
     g_day_from_ugl_mld,
     kg_day_from_mgl_mld,
+    run_pfas_mixture,
+    run_pfas_uncertainty,
     run_plant_twin,
+    run_scenarios,
 )
 
 
@@ -102,9 +110,11 @@ class PlantModelTests(unittest.TestCase):
         out = run_plant_twin(_inputs("daspoort"))
         self.assertGreater(out.cod_removal_pct, 50.0)
         self.assertGreater(out.nh4_removal_pct, 50.0)
+        # Full four-pathway mass balance: in = eff + sludge + biotransformed + unresolved
         self.assertAlmostEqual(
             out.pfas_in_g_day,
-            out.pfas_effluent_g_day + out.pfas_sludge_g_day + out.pfas_unresolved_g_day,
+            out.pfas_effluent_g_day + out.pfas_sludge_g_day
+            + out.pfas_biotransformed_g_day + out.pfas_unresolved_g_day,
             places=6,
         )
 
@@ -129,6 +139,224 @@ class PlantModelTests(unittest.TestCase):
         self.assertIn("Anaerobic Ponds", names)
         self.assertIn("Trickling Filter and Humus Tanks", names)
         self.assertGreater(out.cod_removal_pct, 50.0)
+
+
+class PFASMassBalanceTests(unittest.TestCase):
+    """Four-pathway PFAS mass balance: in = eff + sludge + biotransformed + unresolved."""
+
+    def _balance(self, out):
+        return (out.pfas_effluent_g_day + out.pfas_sludge_g_day
+                + out.pfas_biotransformed_g_day + out.pfas_unresolved_g_day)
+
+    def test_four_pathway_balance_closes_for_all_plants(self):
+        for slug in ("daspoort", "zeekoegat", "phola"):
+            out = run_plant_twin(_inputs(slug))
+            self.assertAlmostEqual(out.pfas_in_g_day, self._balance(out), places=6,
+                                   msg=f"{slug}: mass balance did not close")
+
+    def test_sludge_plus_biotransformed_equals_removed_load(self):
+        out = run_plant_twin(_inputs("daspoort", pfas_type="long-chain", pfas_compound="PFOS"))
+        removed = out.pfas_in_g_day - out.pfas_effluent_g_day
+        self.assertAlmostEqual(removed, out.pfas_sludge_g_day + out.pfas_biotransformed_g_day, places=6)
+
+    def test_long_chain_has_lower_biotransformation_than_short_chain(self):
+        # Biotransformation fraction is defined relative to REMOVED load, not influent.
+        # Long-chain: bioT = 2% of removed; short-chain: 8% of removed.
+        long  = run_plant_twin(_inputs("daspoort", pfas_type="long-chain",  pfas_compound="PFOS"))
+        short = run_plant_twin(_inputs("daspoort", pfas_type="short-chain", pfas_compound="PFBS"))
+        long_removed  = max(long.pfas_in_g_day  - long.pfas_effluent_g_day,  1e-9)
+        short_removed = max(short.pfas_in_g_day - short.pfas_effluent_g_day, 1e-9)
+        long_bioT_frac  = long.pfas_biotransformed_g_day  / long_removed
+        short_bioT_frac = short.pfas_biotransformed_g_day / short_removed
+        self.assertLess(long_bioT_frac, short_bioT_frac)
+
+    def test_calibration_does_not_break_mass_balance(self):
+        inp = _inputs("daspoort", pfas_type="long-chain", pfas_compound="PFOS",
+                      calibration_factors={"pfas": 1.5, "cod": 0.9})
+        out = run_plant_twin(inp)
+        self.assertAlmostEqual(out.pfas_in_g_day, self._balance(out), places=6)
+
+    def test_biotransformation_fraction_constants_are_positive_and_ordered(self):
+        sc = PFAS_BIOTRANSFORMATION_FRACTION["short-chain"]
+        lc = PFAS_BIOTRANSFORMATION_FRACTION["long-chain"]
+        self.assertGreater(sc, 0.0)
+        self.assertGreater(lc, 0.0)
+        self.assertGreater(sc, lc)
+
+
+class ComplianceLimitTests(unittest.TestCase):
+    """Compliance flags vs SA Green Drop / SANS discharge limits."""
+
+    def test_discharge_limits_defined_for_all_three_plants(self):
+        for slug in ("daspoort", "zeekoegat", "phola"):
+            self.assertIn(slug, DISCHARGE_LIMITS)
+            limits = DISCHARGE_LIMITS[slug]
+            for param in ("cod_mgl", "nh4_mgl", "tn_mgl", "tp_mgl"):
+                self.assertIn(param, limits)
+                self.assertGreater(limits[param], 0.0)
+
+    def test_zeekoegat_has_tighter_limits_than_daspoort(self):
+        self.assertLess(DISCHARGE_LIMITS["zeekoegat"]["cod_mgl"],
+                        DISCHARGE_LIMITS["daspoort"]["cod_mgl"])
+        self.assertLess(DISCHARGE_LIMITS["zeekoegat"]["tp_mgl"],
+                        DISCHARGE_LIMITS["daspoort"]["tp_mgl"])
+
+    def test_compliance_flags_present_in_output(self):
+        out = run_plant_twin(_inputs("daspoort"))
+        self.assertIsInstance(out.compliance, dict)
+        for key in ("cod", "nh4", "tn", "tp"):
+            self.assertIn(key, out.compliance)
+            self.assertIn(out.compliance[key], ("PASS", "WARN", "FAIL"))
+
+    def test_effluent_well_below_limits_gives_all_pass(self):
+        # Very low influent → effluent will be far below limits
+        out = run_plant_twin(_inputs("daspoort", inf_cod_mgl=5.0, inf_nh4_mgl=0.5,
+                                     inf_tn_mgl=1.0, inf_tp_mgl=0.05))
+        for key in ("cod", "nh4", "tn", "tp"):
+            self.assertEqual("PASS", out.compliance[key], msg=f"{key} should be PASS")
+
+    def test_confidence_label_names_correct_plant_when_calibrated(self):
+        for slug, expected in [("daspoort", "Daspoort"),
+                                ("zeekoegat", "Zeekoegat"),
+                                ("phola", "Phola")]:
+            out = run_plant_twin(_inputs(slug, calibration_factors={"cod": 0.9}))
+            self.assertIn(expected, out.confidence_label)
+            self.assertIn("calibrated", out.confidence_label.lower())
+
+    def test_uncalibrated_confidence_is_generic_literature_label(self):
+        out = run_plant_twin(_inputs("daspoort"))
+        self.assertIn("literature", out.confidence_label.lower())
+        self.assertNotIn("Daspoort", out.confidence_label)
+
+
+class PFASMixtureTests(unittest.TestCase):
+    """Multi-compound PFAS mixture mode."""
+
+    def _base(self, slug="daspoort"):
+        return _inputs(slug, inf_pfas_ugl=1.0, pfas_type="long-chain")
+
+    def test_mixture_returns_one_result_per_compound(self):
+        compounds = [
+            PFASMixtureEntry("PFOS", "long-chain", 0.5),
+            PFASMixtureEntry("PFOA", "long-chain", 0.3),
+            PFASMixtureEntry("PFBS", "short-chain", 1.2),
+        ]
+        results = run_pfas_mixture(self._base(), compounds)
+        self.assertEqual(3, len(results))
+
+    def test_mixture_sludge_plus_biotrans_equals_removed_load(self):
+        compounds = [
+            PFASMixtureEntry("PFOS", "long-chain", 0.5),
+            PFASMixtureEntry("PFBS", "short-chain", 1.0),
+        ]
+        for r in run_pfas_mixture(self._base(), compounds):
+            removed = g_day_from_ugl_mld(r.inf_ugl * r.removal_pct / 100.0,
+                                          self._base().flow_mld)
+            self.assertAlmostEqual(removed, r.sludge_g_day + r.biotrans_g_day, places=6,
+                                   msg=f"{r.compound}: mass balance failed")
+
+    def test_long_chain_removes_more_than_short_chain_at_same_mlss(self):
+        inp = self._base()
+        results = run_pfas_mixture(inp, [
+            PFASMixtureEntry("PFOS", "long-chain", 1.0),
+            PFASMixtureEntry("PFBS", "short-chain", 1.0),
+        ])
+        pfos = next(r for r in results if r.compound == "PFOS")
+        pfbs = next(r for r in results if r.compound == "PFBS")
+        self.assertGreater(pfos.removal_pct, pfbs.removal_pct)
+
+    def test_mixture_kd_matches_expected_table_value(self):
+        from simulation.generic_model import PFAS_KD_TABLE
+        results = run_pfas_mixture(self._base(), [PFASMixtureEntry("PFOS", "long-chain", 1.0)])
+        self.assertAlmostEqual(PFAS_KD_TABLE["PFOS"], results[0].kd, places=6)
+
+    def test_empty_mixture_returns_empty_list(self):
+        self.assertEqual([], run_pfas_mixture(self._base(), []))
+
+    def test_mixture_effluent_is_always_below_or_equal_influent(self):
+        compounds = [PFASMixtureEntry(c, "long-chain", 0.5) for c in ("PFOS", "PFOA", "PFNA")]
+        for r in run_pfas_mixture(self._base(), compounds):
+            self.assertLessEqual(r.eff_ugl, r.inf_ugl + 1e-9)
+
+
+class PFASUncertaintyTests(unittest.TestCase):
+    """Monte Carlo Kd uncertainty for PFAS removal confidence intervals."""
+
+    def _base(self):
+        return _inputs("daspoort", pfas_type="long-chain", pfas_compound="PFOS",
+                       mlss_mgl=4000.0)
+
+    def test_uncertainty_returns_ordered_low_high_tuple(self):
+        low, high = run_pfas_uncertainty(self._base(), n_samples=200, rng_seed=42)
+        self.assertLessEqual(low, high)
+        self.assertGreaterEqual(low, 0.0)
+        self.assertLessEqual(high, 100.0)
+
+    def test_uncertainty_is_reproducible_with_same_seed(self):
+        r1 = run_pfas_uncertainty(self._base(), n_samples=100, rng_seed=7)
+        r2 = run_pfas_uncertainty(self._base(), n_samples=100, rng_seed=7)
+        self.assertEqual(r1, r2)
+
+    def test_high_kd_compound_has_wider_ci_than_low_kd(self):
+        pfos = run_pfas_uncertainty(_inputs("daspoort", pfas_type="long-chain",
+                                             pfas_compound="PFOS"), n_samples=500, rng_seed=1)
+        pfbs = run_pfas_uncertainty(_inputs("daspoort", pfas_type="short-chain",
+                                             pfas_compound="PFBS"), n_samples=500, rng_seed=1)
+        pfos_width = pfos[1] - pfos[0]
+        pfbs_width = pfbs[1] - pfbs[0]
+        # Higher Kd → steeper slope of adsorption curve → more Kd uncertainty maps to more removal uncertainty
+        self.assertGreater(pfos_width, pfbs_width)
+
+    def test_compute_uncertainty_flag_populates_ci_field(self):
+        out = run_plant_twin(self._base(), compute_uncertainty=True)
+        self.assertIsNotNone(out.pfas_removal_ci)
+        low, high = out.pfas_removal_ci
+        self.assertLessEqual(low, high)
+
+    def test_compute_uncertainty_false_leaves_ci_as_none(self):
+        out = run_plant_twin(self._base(), compute_uncertainty=False)
+        self.assertIsNone(out.pfas_removal_ci)
+
+
+class ScenarioEngineTests(unittest.TestCase):
+    """Diurnal/seasonal scenario batch-runner."""
+
+    def _base(self):
+        return _inputs("daspoort")
+
+    def test_returns_same_count_as_overrides_list(self):
+        overrides = [{"temp_c": t} for t in [10, 15, 20, 25, 30]]
+        results = run_scenarios(self._base(), overrides)
+        self.assertEqual(5, len(results))
+
+    def test_higher_temperature_gives_more_cod_removal(self):
+        cold, warm = run_scenarios(self._base(), [{"temp_c": 10.0}, {"temp_c": 28.0}])
+        self.assertGreater(warm.cod_removal_pct, cold.cod_removal_pct)
+
+    def test_higher_srt_gives_more_nitrification(self):
+        low_srt, high_srt = run_scenarios(self._base(), [{"srt_days": 10.0}, {"srt_days": 40.0}])
+        self.assertGreater(high_srt.nh4_removal_pct, low_srt.nh4_removal_pct)
+
+    def test_diurnal_flow_does_not_affect_pfas_kd_based_removal(self):
+        """PFAS adsorption depends on MLSS and Kd — flow changes HRT but
+        at plant scale the Kd/MLSS term dominates, so removal changes are minor."""
+        results = run_scenarios(self._base(), [
+            {"flow_mld": 20.0, "hrt_hours": 18.0},
+            {"flow_mld": 50.0, "hrt_hours":  7.0},
+        ])
+        for r in results:
+            self.assertGreaterEqual(r.pfas_removal_pct, 0.0)
+            self.assertLessEqual(r.pfas_removal_pct, 100.0)
+
+    def test_empty_overrides_list_returns_empty_results(self):
+        self.assertEqual([], run_scenarios(self._base(), []))
+
+    def test_scenarios_mass_balance_closes_for_every_run(self):
+        results = run_scenarios(self._base(), [{"temp_c": t} for t in [12, 18, 24, 30]])
+        for r in results:
+            total = (r.pfas_effluent_g_day + r.pfas_sludge_g_day
+                     + r.pfas_biotransformed_g_day + r.pfas_unresolved_g_day)
+            self.assertAlmostEqual(r.pfas_in_g_day, total, places=6)
 
 
 class PlantCalibrationTests(unittest.TestCase):

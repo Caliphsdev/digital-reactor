@@ -33,7 +33,7 @@ from PySide6.QtGui import QFont, QColor, QBrush
 from core.database import get_session
 from core.models import Experiment, DailyReading, FlowReading
 from core.validators import validate_daily_payload, summarize_issues
-from ui.theme import dark_date_edit_style
+from ui.theme import dark_date_edit_style, confirm_discard
 
 
 # ── Zone and field definitions ─────────────────────────────────────────────────
@@ -798,14 +798,14 @@ class DataEntryScreen(QWidget):
         if self._loading_form:
             return
         if self._dirty:
-            keep = QMessageBox.question(
+            keep = confirm_discard(
                 self,
                 "Unsaved Changes",
                 "You have unsaved daily readings. Discard these changes and load a new date?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                yes_label="Load New Date",
+                no_label="Keep Editing",
             )
-            if keep != QMessageBox.Yes:
+            if not keep:
                 self._loading_form = True
                 self._date_edit.blockSignals(True)
                 self._date_edit.setDate(self._loaded_date)
@@ -1067,14 +1067,13 @@ class DataEntryScreen(QWidget):
         """Return False when the user cancels navigation with unsaved edits."""
         if not self._dirty:
             return True
-        answer = QMessageBox.question(
+        return confirm_discard(
             self,
             "Unsaved Changes",
             "You have unsaved daily readings. Leave this screen and discard changes?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            yes_label="Leave Screen",
+            no_label="Stay Here",
         )
-        return answer == QMessageBox.Yes
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
     def showEvent(self, event) -> None:

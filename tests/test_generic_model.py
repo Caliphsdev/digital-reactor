@@ -1,6 +1,9 @@
 import unittest
 
-from simulation.generic_model import SimInputs, get_kd, run_phase1
+from simulation.generic_model import (
+    SimInputs, get_kd, run_phase1,
+    PFAS_KD_TABLE, KD_SHORT_CHAIN, KD_LONG_CHAIN,
+)
 
 
 def _inputs(**overrides):
@@ -54,6 +57,72 @@ class GenericModelTests(unittest.TestCase):
     def test_out_of_range_operating_conditions_report_warnings(self):
         out = run_phase1(_inputs(flow_rate_mlh=800.0, do_mgl=0.2, temp_c=10.0, ph=5.8))
         self.assertGreaterEqual(len(out.warnings), 4)
+
+
+class GenericModelEdgeCaseTests(unittest.TestCase):
+    def test_compound_lookup_is_case_insensitive(self):
+        self.assertEqual(get_kd("PFOS", "long-chain"), get_kd("pfos", "long-chain"))
+        self.assertEqual(get_kd("PFOS", "long-chain"), get_kd("Pfos", "long-chain"))
+        self.assertEqual(7.0, get_kd("pfos", "long-chain"))
+
+    def test_all_kd_table_values_are_positive(self):
+        for compound, kd in PFAS_KD_TABLE.items():
+            self.assertGreater(kd, 0.0, f"{compound} has non-positive Kd: {kd}")
+
+    def test_class_fallback_values_are_positive(self):
+        self.assertGreater(KD_SHORT_CHAIN, 0.0)
+        self.assertGreater(KD_LONG_CHAIN, 0.0)
+        self.assertGreater(KD_LONG_CHAIN, KD_SHORT_CHAIN)
+
+    def test_higher_temperature_increases_cod_removal(self):
+        out_cold = run_phase1(_inputs(temp_c=15.0))
+        out_warm = run_phase1(_inputs(temp_c=25.0))
+        self.assertGreater(out_warm.cod_removal_pct, out_cold.cod_removal_pct)
+        self.assertGreater(out_warm.temp_factor, out_cold.temp_factor)
+
+    def test_do_zero_causes_nitrification_washout(self):
+        # DO=0 → do_factor=0 → mu_net_n<0 → denom≤0 → washout
+        out = run_phase1(_inputs(do_mgl=0.0))
+        self.assertTrue(out.monod_washout)
+        self.assertEqual(0.0, out.nh4_removal_pct)
+
+    def test_hrt_decreases_with_increasing_flow(self):
+        out_low  = run_phase1(_inputs(flow_rate_mlh=200.0))
+        out_high = run_phase1(_inputs(flow_rate_mlh=400.0))
+        self.assertGreater(out_low.hrt_days, out_high.hrt_days)
+
+    def test_alkalinity_consumed_equals_nh4_removed_times_stoichiometry(self):
+        # Stoichiometric constant: 7.14 mg CaCO3 per mg NH4-N nitrified
+        inp = _inputs()
+        out = run_phase1(inp)
+        nh4_removed_mgl = inp.inf_nh4 - out.eff_nh4
+        self.assertAlmostEqual(out.alk_consumed_mgl, nh4_removed_mgl * 7.14, places=5)
+
+    def test_fm_ratio_increases_with_higher_flow(self):
+        out_low  = run_phase1(_inputs(flow_rate_mlh=200.0))
+        out_high = run_phase1(_inputs(flow_rate_mlh=400.0))
+        self.assertGreater(out_high.fm_ratio, out_low.fm_ratio)
+
+    def test_pfas_removal_increases_with_mlss(self):
+        out_low  = run_phase1(_inputs(mlss_mgl=1000.0))
+        out_high = run_phase1(_inputs(mlss_mgl=5000.0))
+        self.assertGreater(out_high.pfas_removal_pct, out_low.pfas_removal_pct)
+
+    def test_zero_flow_returns_zero_hrt_and_fm(self):
+        # Flow=0 should not raise; outputs should be clamped to zero
+        out = run_phase1(_inputs(flow_rate_mlh=0.0))
+        self.assertEqual(0.0, out.hrt_days)
+        self.assertEqual(0.0, out.fm_ratio)
+
+    def test_unknown_compound_falls_back_to_chain_class(self):
+        kd_short = get_kd("no_such_compound", "short-chain")
+        kd_long  = get_kd("no_such_compound", "long-chain")
+        self.assertEqual(KD_SHORT_CHAIN, kd_short)
+        self.assertEqual(KD_LONG_CHAIN, kd_long)
+
+    def test_empty_compound_falls_back_to_chain_class(self):
+        self.assertEqual(KD_SHORT_CHAIN, get_kd("", "short-chain"))
+        self.assertEqual(KD_LONG_CHAIN,  get_kd("", "long-chain"))
 
 
 if __name__ == "__main__":

@@ -17,7 +17,10 @@ Design intent: Professional scientific look.
   Works at any window size ≥ 1024×680 px.
 """
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import (
+    QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+)
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 
 
@@ -430,3 +433,81 @@ def btn_outline() -> str:
         }}
         QPushButton:hover {{ background-color: {COLORS['blue_light']}; }}
     """
+
+
+def confirm_discard(parent, title: str, message: str,
+                    yes_label: str = "Yes, Discard",
+                    no_label: str = "No, Keep Editing") -> bool:
+    """
+    Show a clearly styled confirmation dialog with explicit button colours.
+
+    Returns True when the user clicks the destructive (yes) button.
+    Use this instead of QMessageBox.question() — native Windows controls
+    ignore QSS, making plain QMessageBox buttons near-invisible on light
+    backgrounds.
+    """
+    import qtawesome as qta
+
+    dlg = QDialog(parent)
+    dlg.setWindowTitle(title)
+    dlg.setModal(True)
+    dlg.setFixedWidth(400)
+    dlg.setStyleSheet(f"background-color: {COLORS['card_bg']};")
+
+    layout = QVBoxLayout(dlg)
+    layout.setSpacing(16)
+    layout.setContentsMargins(24, 24, 24, 20)
+
+    # Warning icon + message
+    row = QHBoxLayout()
+    row.setSpacing(14)
+    icon_lbl = QLabel()
+    icon_lbl.setPixmap(
+        qta.icon("fa5s.exclamation-triangle", color=COLORS["amber"]).pixmap(30, 30)
+    )
+    icon_lbl.setStyleSheet("background: transparent;")
+    row.addWidget(icon_lbl, 0, Qt.AlignTop)
+
+    msg = QLabel(message)
+    msg.setWordWrap(True)
+    msg.setStyleSheet(
+        f"font-size: 11pt; color: {COLORS['text_primary']}; background: transparent;"
+    )
+    row.addWidget(msg, 1)
+    layout.addLayout(row)
+
+    # Buttons
+    btn_row = QHBoxLayout()
+    btn_row.setSpacing(10)
+    btn_row.addStretch()
+
+    btn_no = QPushButton(no_label)
+    btn_no.setFixedHeight(34)
+    btn_no.setDefault(True)
+    btn_no.setStyleSheet(f"""
+        QPushButton {{
+            background-color: {COLORS['text_secondary']}; color: white;
+            border: none; border-radius: 4px; padding: 0 18px; font-size: 10pt;
+        }}
+        QPushButton:hover  {{ background-color: #7f8c8d; }}
+        QPushButton:pressed {{ background-color: {COLORS['text_secondary']}; }}
+    """)
+    btn_no.clicked.connect(dlg.reject)
+
+    btn_yes = QPushButton(yes_label)
+    btn_yes.setFixedHeight(34)
+    btn_yes.setStyleSheet(f"""
+        QPushButton {{
+            background-color: {COLORS['red']}; color: white;
+            border: none; border-radius: 4px; padding: 0 18px; font-size: 10pt;
+        }}
+        QPushButton:hover  {{ background-color: #c0392b; }}
+        QPushButton:pressed {{ background-color: #a93226; }}
+    """)
+    btn_yes.clicked.connect(dlg.accept)
+
+    btn_row.addWidget(btn_no)
+    btn_row.addWidget(btn_yes)
+    layout.addLayout(btn_row)
+
+    return dlg.exec() == QDialog.Accepted

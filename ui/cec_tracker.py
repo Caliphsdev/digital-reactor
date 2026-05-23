@@ -14,7 +14,7 @@ Layout:
 
 Sampling points:
     SP1_influent   — raw influent (before any treatment)
-    SP2_primary    — after anaerobic zone
+    SP2_primary    — after primary settling tank
     SP3_clarifier  — clarifier output
     SP4_effluent   — final effluent
 
@@ -42,15 +42,15 @@ from PySide6.QtCharts import (
 from core.database import get_session
 from core.models import Experiment, CECReading
 from core.validators import validate_cec_payload, summarize_issues
-from ui.theme import dark_date_edit_style
+from ui.theme import dark_date_edit_style, confirm_discard
 
 
 # ── Sampling point definitions ─────────────────────────────────────────────────
 SAMPLING_POINTS = [
-    ("SP1_influent",  "SP1 — Influent",   "#e74c3c"),
-    ("SP2_primary",   "SP2 — Anaerobic",  "#8e44ad"),
-    ("SP3_clarifier", "SP3 — Clarifier",  "#2471a3"),
-    ("SP4_effluent",  "SP4 — Effluent",   "#27ae60"),
+    ("SP1_influent",  "SP1 — Influent",          "#e74c3c"),
+    ("SP2_primary",   "SP2 — Primary Settling",  "#8e44ad"),
+    ("SP3_clarifier", "SP3 — Clarifier",          "#2471a3"),
+    ("SP4_effluent",  "SP4 — Effluent",           "#27ae60"),
 ]
 
 SP_LABELS = {k: label for k, label, _ in SAMPLING_POINTS}
@@ -524,14 +524,14 @@ class CECTrackerScreen(QWidget):
         if self._loading_form:
             return
         if self._dirty:
-            keep = QMessageBox.question(
+            keep = confirm_discard(
                 self,
                 "Unsaved Changes",
                 "You have unsaved CEC readings. Discard these changes and use a new date?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                yes_label="Use New Date",
+                no_label="Keep Editing",
             )
-            if keep != QMessageBox.Yes:
+            if not keep:
                 self._loading_form = True
                 self._date_edit.blockSignals(True)
                 self._date_edit.setDate(self._loaded_date)
@@ -564,11 +564,11 @@ class CECTrackerScreen(QWidget):
     def _populate_eff_table(self, values: list) -> None:
         """Fill the 5-row efficiency table: 3 stage rows + separator + overall."""
         stage_defs = [
-            ("Influent → Anaerobic (SP1→SP2)", 0, 1),
-            ("Anaerobic → Clarifier (SP2→SP3)", 1, 2),
-            ("Clarifier → Effluent (SP3→SP4)",  2, 3),
-            (None, None, None),                              # separator row
-            ("Overall Removal (SP1→SP4)",        0, 3),
+            ("Influent → Primary Settling (SP1→SP2)", 0, 1),
+            ("Primary Settling → Clarifier (SP2→SP3)", 1, 2),
+            ("Clarifier → Effluent (SP3→SP4)",          2, 3),
+            (None, None, None),
+            ("Overall Removal (SP1→SP4)",               0, 3),
         ]
 
         self._eff_table.setRowCount(len(stage_defs))
@@ -645,7 +645,7 @@ class CECTrackerScreen(QWidget):
         layout.addWidget(self._make_divider())
 
         cols = ["Date", "CEC", "Type", "Method",
-                "SP1 Influent", "SP2 Anaerobic", "SP3 Clarifier", "SP4 Effluent",
+                "SP1 Influent", "SP2 Primary Settling", "SP3 Clarifier", "SP4 Effluent",
                 "Overall Removal %"]
         self._history_table = QTableWidget(0, len(cols))
         self._history_table.setHorizontalHeaderLabels(cols)
@@ -830,14 +830,13 @@ class CECTrackerScreen(QWidget):
         """Return False when the user cancels navigation with unsaved edits."""
         if not self._dirty:
             return True
-        answer = QMessageBox.question(
+        return confirm_discard(
             self,
             "Unsaved Changes",
             "You have unsaved CEC readings. Leave this screen and discard changes?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
+            yes_label="Leave Screen",
+            no_label="Stay Here",
         )
-        return answer == QMessageBox.Yes
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
     def showEvent(self, event) -> None:

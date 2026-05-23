@@ -59,6 +59,38 @@ PFAS_KD_TABLE: dict[str, float] = {
 KD_SHORT_CHAIN = 0.8    # L/kg  (conservative class average)
 KD_LONG_CHAIN  = 4.5    # L/kg  (class average)
 
+# ── UI compound list: (display label, compound key) ──────────────────────────
+# Ordered long-chain first (highest Kd / most regulated), then short-chain.
+# Both UI screens import this so the list stays in one place.
+PFAS_COMPOUND_LIST: list[tuple[str, str]] = [
+    ("— class average —",                ""),
+    ("PFOS  (C8 sulfonate,  long-chain)", "PFOS"),
+    ("PFHxS (C6 sulfonate,  long-chain)", "PFHxS"),
+    ("PFNS  (C9 sulfonate,  long-chain)", "PFNS"),
+    ("PFDS  (C10 sulfonate, long-chain)", "PFDS"),
+    ("PFOA  (C8 carboxylate, long-chain)","PFOA"),
+    ("PFNA  (C9 carboxylate, long-chain)","PFNA"),
+    ("PFDA  (C10 carboxylate, long-chain)","PFDA"),
+    ("PFUnA (C11 carboxylate, long-chain)","PFUnA"),
+    ("PFDoA (C12 carboxylate, long-chain)","PFDoA"),
+    ("PFBS  (C4 sulfonate,  short-chain)","PFBS"),
+    ("PFPeS (C5 sulfonate,  short-chain)","PFPeS"),
+    ("PFBA  (C4 carboxylate, short-chain)","PFBA"),
+    ("PFPeA (C5 carboxylate, short-chain)","PFPeA"),
+    ("PFHxA (C6 carboxylate, short-chain)","PFHxA"),
+    ("PFHpA (C7 carboxylate, short-chain)","PFHpA"),
+]
+
+# Maps compound key → chain type for auto-setting the type dropdown
+PFAS_COMPOUND_CHAIN_TYPE: dict[str, str] = {
+    "PFOS": "long-chain",  "PFHxS": "long-chain",  "PFNS": "long-chain",
+    "PFDS": "long-chain",  "PFOA": "long-chain",   "PFNA": "long-chain",
+    "PFDA": "long-chain",  "PFUnA": "long-chain",  "PFDoA": "long-chain",
+    "PFBS": "short-chain", "PFPeS": "short-chain",
+    "PFBA": "short-chain", "PFPeA": "short-chain", "PFHxA": "short-chain",
+    "PFHpA": "short-chain",
+}
+
 
 def get_kd(pfas_compound: str, pfas_type: str) -> float:
     """

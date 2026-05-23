@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont
 
+from datetime import timedelta
+
 from datetime import date as dt_date
 
 from core.database import get_session
@@ -44,6 +46,7 @@ class HomeScreen(QWidget):
         layout.addWidget(self._build_header())
         layout.addWidget(self._build_diagram(), stretch=1)
         layout.addWidget(self._build_kinetics_card())
+        layout.addWidget(self._build_completeness_strip())
         layout.addWidget(self._build_status_bar())
 
         self._refresh_status()
@@ -260,6 +263,130 @@ class HomeScreen(QWidget):
         self._diagram = ReactorDiagram()
         return self._diagram
 
+    # ── Data completeness strip ────────────────────────────────────────────────
+    _DAYS_SHOWN = 14
+    _ZONES_EXPECTED = {"primary_settling", "aeration", "clarifier", "effluent"}
+
+    def _build_completeness_strip(self) -> QWidget:
+        """
+        A thin strip showing last 14 days as coloured dots:
+          Green  = all 4 zones + flow reading present
+          Amber  = some readings present but incomplete
+          Grey   = no readings at all for this day
+        Hovering a dot shows the exact date and what was filled.
+        """
+        bar = QWidget()
+        bar.setFixedHeight(32)
+        bar.setStyleSheet(
+            "background:#f0f3f4; border-top:1px solid #d5dbdb;"
+            " border-bottom:1px solid #d5dbdb;"
+        )
+        row = QHBoxLayout(bar)
+        row.setContentsMargins(14, 0, 14, 0)
+        row.setSpacing(0)
+
+        hdr = QLabel("Data log (14 days):")
+        hdr.setStyleSheet("color:#7f8c8d; font-size:10px; font-weight:600;")
+        row.addWidget(hdr)
+        row.addSpacing(8)
+
+        self._completeness_dots: list[QLabel] = []
+        for _ in range(self._DAYS_SHOWN):
+            dot = QLabel("●")
+            dot.setFixedWidth(18)
+            dot.setAlignment(Qt.AlignCenter)
+            dot.setStyleSheet("color:#d5dbdb; font-size:14px;")
+            dot.setToolTip("Loading…")
+            row.addWidget(dot)
+
+            self._completeness_dots.append(dot)
+
+        row.addSpacing(8)
+        self._completeness_legend = QLabel("● full  ● partial  ● none")
+        self._completeness_legend.setStyleSheet("color:#95a5a6; font-size:9px;")
+        row.addWidget(self._completeness_legend)
+        row.addStretch()
+
+        return bar
+
+    def _refresh_completeness(self) -> None:
+        """Query last 14 days of readings and colour the completeness dots."""
+        today = dt_date.today()
+        days = [today - timedelta(days=i) for i in range(self._DAYS_SHOWN - 1, -1, -1)]
+
+        try:
+            with get_session() as session:
+                active = session.query(Experiment).filter_by(is_active=True).first()
+                if not active:
+                    for dot in self._completeness_dots:
+                        dot.setStyleSheet("color:#d5dbdb; font-size:14px;")
+                        dot.setToolTip("No active experiment")
+                    return
+
+                exp_id = active.id
+                # Fetch daily readings for the last 14 days
+                daily = (
+                    session.query(DailyReading.reading_date, DailyReading.zone)
+                    .filter(
+                        DailyReading.experiment_id == exp_id,
+                        DailyReading.reading_date.in_(days),
+                    )
+                    .all()
+                )
+                # Fetch flow readings for the last 14 days
+                flows = {
+                    r.reading_date
+                    for r in session.query(FlowReading.reading_date)
+                    .filter(
+                        FlowReading.experiment_id == exp_id,
+                        FlowReading.reading_date.in_(days),
+                    )
+                    .all()
+                }
+
+        except Exception:
+            return
+
+        # Group zones by date
+        zones_by_date: dict[dt_date, set[str]] = {}
+        for rdate, zone in daily:
+            zones_by_date.setdefault(rdate, set()).add(zone)
+
+        for i, day in enumerate(days):
+            dot = self._completeness_dots[i]
+            zones = zones_by_date.get(day, set())
+            has_flow = day in flows
+            n_zones = len(zones & self._ZONES_EXPECTED)
+
+            if n_zones == 4 and has_flow:
+                # Complete day
+                dot.setStyleSheet("color:#27ae60; font-size:14px;")
+                tip = f"{day}  ✓ All zones + flow"
+            elif n_zones > 0 or has_flow:
+                # Partial
+                dot.setStyleSheet("color:#e67e22; font-size:14px;")
+                missing = self._ZONES_EXPECTED - zones
+                parts = []
+                if missing:
+                    parts.append(f"Missing zones: {', '.join(sorted(missing))}")
+                if not has_flow:
+                    parts.append("No flow reading")
+                tip = f"{day}  ⚠ Partial — " + "; ".join(parts)
+            else:
+                # No data
+                dot.setStyleSheet("color:#d5dbdb; font-size:14px;")
+                tip = f"{day}  ✗ No readings"
+
+            dot.setToolTip(tip)
+
+        # Update legend colours
+        self._completeness_legend.setText(
+            "<span style='color:#27ae60'>● full</span>  "
+            "<span style='color:#e67e22'>● partial</span>  "
+            "<span style='color:#d5dbdb'>● none</span>"
+        )
+        self._completeness_legend.setTextFormat(Qt.RichText)
+
     # ── Status bar ─────────────────────────────────────────────────────────────
     def _build_status_bar(self) -> QWidget:
         """
@@ -295,6 +422,7 @@ class HomeScreen(QWidget):
         self._diagram.update()
         self._refresh_status()
         self._refresh_kinetics()
+        self._refresh_completeness()
 
     def _refresh_status(self) -> None:
         """
@@ -321,7 +449,8 @@ class HomeScreen(QWidget):
             self._status_label.setText("Database unavailable.")
 
     def showEvent(self, event) -> None:
-        """Refresh status and kinetics whenever this screen becomes visible."""
+        """Refresh status, kinetics, and completeness whenever this screen becomes visible."""
         super().showEvent(event)
         self._refresh_status()
         self._refresh_kinetics()
+        self._refresh_completeness()

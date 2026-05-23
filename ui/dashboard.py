@@ -1,16 +1,20 @@
 """
 dashboard.py — Step 9: Comparison Dashboard screen.
 
-Four chart tabs for analysing and comparing reactor performance:
-  Tab 1  Lab vs Daspoort  — lab removal % vs full-scale WWTP removal % over time
-  Tab 2  Model vs Actual  — Phase 1 simulation predictions vs measured values
-  Tab 3  CEC Trends       — CEC concentration at each sampling point over time
-  Tab 4  Parameter Trends — daily DO / pH / COD / NH4 etc. per zone over time
+Six chart / data tabs for analysing and comparing reactor performance:
+  Tab 1  Lab vs Daspoort    — lab removal % vs full-scale WWTP removal % over time
+  Tab 2  Model vs Actual    — Phase 1 simulation predictions vs measured values
+  Tab 3  CEC Trends         — CEC concentration at each sampling point over time
+  Tab 4  Parameter Trends   — daily DO / pH / COD / NH4 etc. per zone over time
+  Tab 5  Data Quality       — completeness and QA override tracking
+  Tab 6  Statistics         — per-CEC mean/SD/CV removal table + bar chart
+  Tab 7  PFAS Speciation    — ranked bar chart: compound vs mean overall removal %
 
-Export button saves all four charts as PNG images to a chosen folder.
+Export button saves charts as PNG images to a chosen folder.
 """
 
 import os
+import statistics
 from datetime import datetime
 from collections import defaultdict
 
@@ -22,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCharts import (
     QChart, QChartView, QLineSeries,
+    QBarSeries, QBarSet, QBarCategoryAxis,
     QValueAxis, QDateTimeAxis,
 )
 from PySide6.QtCore import Qt, QDateTime, QDate, QTime, QMargins, QSize
@@ -213,17 +218,21 @@ class DashboardScreen(QWidget):
         root.addWidget(content)
 
         # Build tabs and keep references for PNG export
-        self._tab_ld = self._build_tab_lab_daspoort()
-        self._tab_mv = self._build_tab_model_vs_actual()
-        self._tab_ct = self._build_tab_cec_trends()
-        self._tab_pt = self._build_tab_param_trends()
-        self._tab_dq = self._build_tab_data_quality()
+        self._tab_ld   = self._build_tab_lab_daspoort()
+        self._tab_mv   = self._build_tab_model_vs_actual()
+        self._tab_ct   = self._build_tab_cec_trends()
+        self._tab_pt   = self._build_tab_param_trends()
+        self._tab_dq   = self._build_tab_data_quality()
+        self._tab_stat = self._build_tab_statistics()
+        self._tab_spec = self._build_tab_pfas_speciation()
 
-        self._tabs.addTab(self._tab_ld, "  Lab vs Daspoort  ")
-        self._tabs.addTab(self._tab_mv, "  Model vs Actual  ")
-        self._tabs.addTab(self._tab_ct, "  CEC Trends  ")
-        self._tabs.addTab(self._tab_pt, "  Parameter Trends  ")
-        self._tabs.addTab(self._tab_dq, "  Data Quality  ")
+        self._tabs.addTab(self._tab_ld,   "  Lab vs Daspoort  ")
+        self._tabs.addTab(self._tab_mv,   "  Model vs Actual  ")
+        self._tabs.addTab(self._tab_ct,   "  CEC Trends  ")
+        self._tabs.addTab(self._tab_pt,   "  Parameter Trends  ")
+        self._tabs.addTab(self._tab_dq,   "  Data Quality  ")
+        self._tabs.addTab(self._tab_stat, "  Statistics  ")
+        self._tabs.addTab(self._tab_spec, "  PFAS Speciation  ")
 
     # ── Tab 1: Lab vs Daspoort ─────────────────────────────────────────────────
 
@@ -936,16 +945,363 @@ class DashboardScreen(QWidget):
         self._dq_completeness_view.setChart(comp_chart)
         self._dq_override_view.setChart(ov_chart)
 
+    # ── Tab 6: Statistics ─────────────────────────────────────────────────────
+
+    def _build_tab_statistics(self) -> QWidget:
+        """
+        Tab 6: Per-CEC removal statistics table (mean, SD, CV%, n, best, worst)
+        and a bar chart of mean removal % by CEC compound.
+        """
+        w = QWidget()
+        w.setStyleSheet(f"background:{C_CARD};")
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
+
+        # Experiment selector row
+        top_row = QHBoxLayout()
+        lbl = QLabel("Experiment:")
+        lbl.setStyleSheet(f"color:{C_TEXT}; font-size:11px; font-weight:600;")
+        top_row.addWidget(lbl)
+        self._stat_exp_combo = QComboBox()
+        self._stat_exp_combo.setFixedWidth(300)
+        self._stat_exp_combo.setStyleSheet(self._combo_style())
+        self._stat_exp_combo.currentIndexChanged.connect(self._refresh_statistics)
+        top_row.addWidget(self._stat_exp_combo)
+        top_row.addStretch()
+        layout.addLayout(top_row)
+
+        # Stats table
+        stat_lbl = QLabel("Removal Efficiency Summary (from mass balance results)")
+        stat_lbl.setStyleSheet(f"color:{C_MUTED}; font-size:10px; font-weight:600;")
+        layout.addWidget(stat_lbl)
+
+        cols = ["CEC", "n", "Mean %", "Std Dev %", "CV %", "Best %", "Worst %", "Median %"]
+        self._stat_table = QTableWidget(0, len(cols))
+        self._stat_table.setHorizontalHeaderLabels(cols)
+        self._stat_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        for c in range(1, len(cols)):
+            self._stat_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+        self._stat_table.verticalHeader().setVisible(False)
+        self._stat_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._stat_table.setAlternatingRowColors(True)
+        self._stat_table.setShowGrid(False)
+        self._stat_table.setFixedHeight(200)
+        self._stat_table.setStyleSheet("""
+            QTableWidget { background:#fff; border:1px solid #dde1e7;
+                border-radius:6px; font-size:11px;
+                alternate-background-color:#f8f9fa; }
+            QHeaderView::section { background:#2c3e50; color:#ecf0f1;
+                font-weight:bold; font-size:10px; padding:6px; border:none; }
+            QTableWidget::item { padding:4px 8px; }
+        """)
+        layout.addWidget(self._stat_table)
+
+        # Mean removal bar chart
+        chart_lbl = QLabel("Mean Removal % by CEC — across all measurement days")
+        chart_lbl.setStyleSheet(f"color:{C_MUTED}; font-size:10px; font-weight:600;")
+        layout.addWidget(chart_lbl)
+
+        self._stat_chart_view = _make_chart_view(_make_chart("Mean Removal % by CEC"))
+        layout.addWidget(self._stat_chart_view, stretch=1)
+
+        return w
+
+    def _refresh_statistics(self):
+        """Compute per-CEC removal stats from mass balance results and render."""
+        exp_id = self._stat_exp_combo.currentData()
+        self._stat_table.setRowCount(0)
+
+        with get_session() as s:
+            q = s.query(MassBalanceResult.cec_name, MassBalanceResult.removal_pct)
+            if exp_id:
+                q = q.filter(MassBalanceResult.experiment_id == exp_id)
+            rows = q.filter(MassBalanceResult.removal_pct.isnot(None)).all()
+
+        # Group by CEC name
+        by_cec: dict[str, list[float]] = defaultdict(list)
+        for cec_name, pct in rows:
+            by_cec[cec_name].append(pct)
+
+        if not by_cec:
+            chart = _make_chart("No mass balance results yet — run a calculation first.")
+            self._stat_chart_view.setChart(chart)
+            return
+
+        # Sort by mean removal descending
+        sorted_cecs = sorted(by_cec.items(), key=lambda x: statistics.mean(x[1]), reverse=True)
+
+        self._stat_table.setRowCount(len(sorted_cecs))
+        bar_labels = []
+        bar_means  = []
+
+        for row_i, (cec_name, vals) in enumerate(sorted_cecs):
+            n    = len(vals)
+            mean = statistics.mean(vals)
+            sd   = statistics.stdev(vals) if n > 1 else 0.0
+            cv   = (sd / mean * 100) if mean > 0 else 0.0
+            best = max(vals)
+            worst= min(vals)
+            med  = statistics.median(vals)
+
+            row_data = [
+                cec_name,
+                str(n),
+                f"{mean:.1f}",
+                f"{sd:.1f}",
+                f"{cv:.1f}",
+                f"{best:.1f}",
+                f"{worst:.1f}",
+                f"{med:.1f}",
+            ]
+            alt = (row_i % 2 == 1)
+            fill = QColor("#f8f9fa") if alt else QColor("#ffffff")
+            for col_i, text in enumerate(row_data):
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignCenter)
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                item.setBackground(QBrush(fill))
+                if col_i == 2:   # Mean % — colour by performance
+                    color = (
+                        QColor("#1e8449") if mean >= 60 else
+                        QColor("#d68910") if mean >= 30 else
+                        QColor("#c0392b")
+                    )
+                    item.setForeground(QBrush(color))
+                    f = item.font(); f.setBold(True); item.setFont(f)
+                self._stat_table.setItem(row_i, col_i, item)
+            self._stat_table.setRowHeight(row_i, 30)
+
+            bar_labels.append(cec_name)
+            bar_means.append(round(mean, 1))
+
+        # Build bar chart
+        bar_set = QBarSet("Mean Removal %")
+        bar_set.setColor(QColor("#2471a3"))
+        for m in bar_means:
+            bar_set.append(m)
+
+        bar_series = QBarSeries()
+        bar_series.append(bar_set)
+
+        chart = _make_chart("Mean Removal % by CEC")
+        chart.addSeries(bar_series)
+
+        x_axis = QBarCategoryAxis()
+        x_axis.append(bar_labels)
+        _style_axis(x_axis)
+        chart.addAxis(x_axis, Qt.AlignmentFlag.AlignBottom)
+        bar_series.attachAxis(x_axis)
+
+        y_axis = QValueAxis()
+        y_axis.setRange(0, 100)
+        _style_axis(y_axis, "Mean Removal (%)")
+        chart.addAxis(y_axis, Qt.AlignmentFlag.AlignLeft)
+        bar_series.attachAxis(y_axis)
+
+        chart.legend().hide()
+        self._stat_chart_view.setChart(chart)
+
+    # ── Tab 7: PFAS Speciation ────────────────────────────────────────────────
+
+    def _build_tab_pfas_speciation(self) -> QWidget:
+        """
+        Tab 7: Ranked bar chart — CEC compound vs mean overall removal %.
+        Short-chain and long-chain compounds use different colours so
+        chain-length effects are immediately visible.
+        """
+        w = QWidget()
+        w.setStyleSheet(f"background:{C_CARD};")
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
+
+        # Description strip
+        desc = QLabel(
+            "Compounds ranked by mean overall removal % (SP1→SP4 across all measurement days).  "
+            "Blue = long-chain  ·  Orange = short-chain  ·  Grey = type unrecorded."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color:{C_MUTED}; font-size:10px;")
+        layout.addWidget(desc)
+
+        self._spec_chart_view = _make_chart_view(_make_chart("PFAS Speciation — Removal %"))
+        layout.addWidget(self._spec_chart_view, stretch=1)
+
+        # Summary table below the chart
+        summary_lbl = QLabel("Per-compound summary")
+        summary_lbl.setStyleSheet(f"color:{C_MUTED}; font-size:10px; font-weight:600;")
+        layout.addWidget(summary_lbl)
+
+        spec_cols = ["Compound", "Chain Type", "n Measurements", "Mean Removal %",
+                     "Best %", "Worst %"]
+        self._spec_table = QTableWidget(0, len(spec_cols))
+        self._spec_table.setHorizontalHeaderLabels(spec_cols)
+        self._spec_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self._spec_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        for c in range(2, len(spec_cols)):
+            self._spec_table.horizontalHeader().setSectionResizeMode(c, QHeaderView.Stretch)
+        self._spec_table.verticalHeader().setVisible(False)
+        self._spec_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._spec_table.setAlternatingRowColors(True)
+        self._spec_table.setShowGrid(False)
+        self._spec_table.setFixedHeight(180)
+        self._spec_table.setStyleSheet("""
+            QTableWidget { background:#fff; border:1px solid #dde1e7;
+                border-radius:6px; font-size:11px;
+                alternate-background-color:#f8f9fa; }
+            QHeaderView::section { background:#2c3e50; color:#ecf0f1;
+                font-weight:bold; font-size:10px; padding:6px; border:none; }
+            QTableWidget::item { padding:4px 8px; }
+        """)
+        layout.addWidget(self._spec_table)
+
+        return w
+
+    def _refresh_pfas_speciation(self):
+        """
+        Load all CEC readings, compute per-compound overall removal (SP1→SP4),
+        rank by mean, and render the bar chart + summary table.
+        """
+        with get_session() as s:
+            rows = (
+                s.query(
+                    CECReading.cec_name,
+                    CECReading.cec_type,
+                    CECReading.reading_date,
+                    CECReading.sampling_point,
+                    CECReading.concentration,
+                )
+                .filter(CECReading.concentration.isnot(None))
+                .all()
+            )
+
+        # Group by (compound, date) → {sp_key: concentration}
+        compound_type: dict[str, str] = {}
+        date_groups: dict[tuple, dict] = defaultdict(dict)
+        for cec_name, cec_type, rdate, sp, conc in rows:
+            compound_type[cec_name] = cec_type or ""
+            date_groups[(cec_name, str(rdate))][sp or ""] = conc or 0.0
+
+        # Per compound — collect SP1→SP4 removal values
+        compound_removals: dict[str, list[float]] = defaultdict(list)
+        for (cec_name, _), sp_map in date_groups.items():
+            sp1 = sp_map.get("SP1_influent")
+            sp4 = sp_map.get("SP4_effluent")
+            if sp1 and sp1 > 0 and sp4 is not None:
+                pct = max(0.0, (sp1 - sp4) / sp1 * 100)
+                compound_removals[cec_name].append(round(pct, 2))
+
+        if not compound_removals:
+            chart = _make_chart(
+                "No paired SP1/SP4 readings yet — enter CEC readings at both sampling points."
+            )
+            self._spec_chart_view.setChart(chart)
+            self._spec_table.setRowCount(0)
+            return
+
+        # Rank by mean removal descending
+        ranked = sorted(
+            [(name, vals) for name, vals in compound_removals.items()],
+            key=lambda x: statistics.mean(x[1]),
+            reverse=True,
+        )
+
+        labels      = [name for name, _ in ranked]
+        long_means  = []
+        short_means = []
+        other_means = []
+
+        for name, vals in ranked:
+            mean = round(statistics.mean(vals), 1)
+            ct = compound_type.get(name, "").lower()
+            if "long" in ct:
+                long_means.append(mean)
+                short_means.append(0.0)
+                other_means.append(0.0)
+            elif "short" in ct:
+                long_means.append(0.0)
+                short_means.append(mean)
+                other_means.append(0.0)
+            else:
+                long_means.append(0.0)
+                short_means.append(0.0)
+                other_means.append(mean)
+
+        bar_long  = QBarSet("Long-chain")
+        bar_short = QBarSet("Short-chain")
+        bar_other = QBarSet("Unclassified")
+        bar_long.setColor(QColor("#2471a3"))
+        bar_short.setColor(QColor("#e67e22"))
+        bar_other.setColor(QColor("#95a5a6"))
+
+        for v in long_means:  bar_long.append(v)
+        for v in short_means: bar_short.append(v)
+        for v in other_means: bar_other.append(v)
+
+        series = QBarSeries()
+        series.append(bar_long)
+        series.append(bar_short)
+        series.append(bar_other)
+
+        chart = _make_chart("PFAS Compound Removal — Ranked (SP1→SP4 Mean %)")
+        chart.addSeries(series)
+
+        x_axis = QBarCategoryAxis()
+        x_axis.append(labels)
+        _style_axis(x_axis)
+        chart.addAxis(x_axis, Qt.AlignmentFlag.AlignBottom)
+        series.attachAxis(x_axis)
+
+        y_axis = QValueAxis()
+        y_axis.setRange(0, 100)
+        _style_axis(y_axis, "Mean Removal (%)")
+        chart.addAxis(y_axis, Qt.AlignmentFlag.AlignLeft)
+        series.attachAxis(y_axis)
+
+        self._spec_chart_view.setChart(chart)
+
+        # Summary table
+        self._spec_table.setRowCount(len(ranked))
+        for row_i, (cec_name, vals) in enumerate(ranked):
+            mean  = statistics.mean(vals)
+            best  = max(vals)
+            worst = min(vals)
+            ct    = compound_type.get(cec_name, "") or "—"
+            alt   = (row_i % 2 == 1)
+            fill  = QColor("#f8f9fa") if alt else QColor("#ffffff")
+            for col_i, text in enumerate([
+                cec_name, ct, str(len(vals)),
+                f"{mean:.1f}%", f"{best:.1f}%", f"{worst:.1f}%",
+            ]):
+                item = QTableWidgetItem(text)
+                item.setTextAlignment(Qt.AlignCenter)
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                item.setBackground(QBrush(fill))
+                if col_i == 3:
+                    color = (
+                        QColor("#1e8449") if mean >= 60 else
+                        QColor("#d68910") if mean >= 30 else
+                        QColor("#c0392b")
+                    )
+                    item.setForeground(QBrush(color))
+                    f = item.font(); f.setBold(True); item.setFont(f)
+                self._spec_table.setItem(row_i, col_i, item)
+            self._spec_table.setRowHeight(row_i, 28)
+
     # ── Refresh entry point ────────────────────────────────────────────────────
 
     def refresh(self):
         """Reload all data and rebuild all dashboard surfaces."""
         self._populate_cec_dropdowns()
+        self._populate_experiment_dropdown()
         self._refresh_lab_daspoort()
         self._refresh_model_vs_actual()
         self._refresh_cec_trends()
         self._refresh_param_trends()
         self._refresh_data_quality()
+        self._refresh_statistics()
+        self._refresh_pfas_speciation()
 
     def _populate_cec_dropdowns(self):
         """
@@ -967,6 +1323,28 @@ class DashboardScreen(QWidget):
                 idx = combo.findText(current)
                 combo.setCurrentIndex(max(0, idx))
             combo.blockSignals(False)
+
+    def _populate_experiment_dropdown(self):
+        """Fill the Statistics tab experiment selector with all experiments."""
+        with get_session() as s:
+            exps = (
+                s.query(Experiment.id, Experiment.name)
+                .order_by(Experiment.start_date.desc())
+                .all()
+            )
+        current_id = self._stat_exp_combo.currentData()
+        self._stat_exp_combo.blockSignals(True)
+        self._stat_exp_combo.clear()
+        self._stat_exp_combo.addItem("All experiments", None)
+        for exp_id, exp_name in exps:
+            self._stat_exp_combo.addItem(exp_name, exp_id)
+        # Restore selection
+        if current_id is not None:
+            for i in range(self._stat_exp_combo.count()):
+                if self._stat_exp_combo.itemData(i) == current_id:
+                    self._stat_exp_combo.setCurrentIndex(i)
+                    break
+        self._stat_exp_combo.blockSignals(False)
 
     # ── PNG export ────────────────────────────────────────────────────────────
 

@@ -34,8 +34,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QDate, QSize, Signal
 from PySide6.QtGui import QFont, QColor, QBrush
 
+import statistics
+
 from core.database import get_session
-from core.models import Experiment
+from ui.theme import confirm_discard
+from core.models import Experiment, DailyReading, CECReading, MassBalanceResult
 
 
 # ── Style constants ────────────────────────────────────────────────────────────
@@ -358,14 +361,15 @@ class ExperimentsScreen(QWidget):
         self.experiment_changed.emit()
 
     def _mark_complete(self, exp_id: int) -> None:
-        """Set end_date = today, signalling the experiment run is finished."""
-        confirm = QMessageBox.question(
+        """Set end_date = today, then show a completion summary."""
+        confirmed = confirm_discard(
             self, "Mark Complete",
-            "Mark this experiment as complete?\n\nThis sets the end date to today.\n"
-            "You can still view its data afterwards.",
-            QMessageBox.Yes | QMessageBox.No,
+            "Mark this experiment as complete?\n\n"
+            "This sets the end date to today. You can still view its data afterwards.",
+            yes_label="Mark Complete",
+            no_label="Cancel",
         )
-        if confirm != QMessageBox.Yes:
+        if not confirmed:
             return
 
         try:
@@ -379,6 +383,85 @@ class ExperimentsScreen(QWidget):
 
         self._refresh_list()
         self.experiment_changed.emit()
+        self._show_completion_summary(exp_id)
+
+    def _show_completion_summary(self, exp_id: int) -> None:
+        """Build and display a summary dialog for a completed experiment."""
+        try:
+            with get_session() as session:
+                exp = session.query(Experiment).filter_by(id=exp_id).first()
+                if not exp:
+                    return
+
+                n_daily = (
+                    session.query(DailyReading)
+                    .filter_by(experiment_id=exp_id)
+                    .count()
+                )
+                cec_dates = (
+                    session.query(CECReading.reading_date)
+                    .filter_by(experiment_id=exp_id)
+                    .distinct()
+                    .all()
+                )
+                n_cec_days = len(cec_dates)
+
+                mb_rows = (
+                    session.query(MassBalanceResult)
+                    .filter_by(experiment_id=exp_id)
+                    .all()
+                )
+                removals = [r.removal_pct for r in mb_rows if r.removal_pct is not None]
+
+                duration = (
+                    (exp.end_date - exp.start_date).days
+                    if exp.start_date and exp.end_date else None
+                )
+
+        except Exception as exc:
+            QMessageBox.warning(self, "Summary Error", str(exc))
+            return
+
+        # Build summary text
+        lines = [
+            f"Experiment:   {exp.name}",
+            f"Duration:     {exp.start_date}  →  {exp.end_date}"
+            + (f"  ({duration} days)" if duration else ""),
+            "",
+            f"Daily log entries:      {n_daily} zone-readings",
+            f"CEC measurement days:   {n_cec_days}",
+            f"Mass balance runs:      {len(mb_rows)}",
+        ]
+
+        if removals:
+            mean_r = statistics.mean(removals)
+            sd_r   = statistics.stdev(removals) if len(removals) > 1 else 0.0
+            lines += [
+                "",
+                "─── Removal Efficiency (all CECs) ───",
+                f"  Mean removal:   {mean_r:.1f}%",
+                f"  Std dev:        {sd_r:.1f}%",
+                f"  Best reading:   {max(removals):.1f}%",
+                f"  Worst reading:  {min(removals):.1f}%",
+            ]
+
+        if exp.cec_spiked:
+            lines += ["", f"CECs spiked:  {exp.cec_spiked}"]
+        if exp.spike_conc:
+            lines += [f"Spike conc:   {exp.spike_conc} µg/L"]
+
+        lines += [
+            "",
+            "Data is archived. Export a full report from the Mass Balance screen.",
+        ]
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Experiment Complete — Summary")
+        msg.setText(f"<b>{exp.name}</b> has been marked complete.")
+        msg.setDetailedText("\n".join(lines))
+        msg.setIcon(QMessageBox.Information)
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.exec()
 
     def _refresh_list(self) -> None:
         """

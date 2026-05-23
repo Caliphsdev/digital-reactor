@@ -136,66 +136,68 @@ go to <b>Settings → Data Management</b> and click <b>Backup Now</b>. Your
     # ── 2 ─────────────────────────────────────────────────────────────────────
     ("Reactor Overview", _html("""
 <h2>Reactor Overview</h2>
-<p>The Digital Reactor mirrors a <b>lab-scale activated sludge (AS) system</b>
-designed according to <b>OECD Guideline 303A</b>. It consists of three biological
-zones in series followed by a secondary clarifier.</p>
+<p>The Digital Reactor mirrors a <b>lab-scale Conventional Activated Sludge (CAS)
+system</b> designed according to <b>OECD Guideline 303A</b>. Raw influent passes
+through a Primary Settling Tank, then an Aeration Tank for biological treatment,
+then a Clarifier for solids separation before discharge.</p>
 
 <h3>Process Flow Sequence</h3>
-<p>Raw influent enters at <b>SP1</b> and passes through four treatment stages:</p>
+<p>Influent enters at <b>SP1</b> and passes through four treatment stages in order:</p>
 
 <table>
-  <tr><th>Stage</th><th>Zone</th><th>Volume</th><th>Purpose</th><th>Key condition</th></tr>
+  <tr><th>Stage</th><th>Unit</th><th>Purpose</th><th>Key condition</th></tr>
   <tr>
     <td>1</td>
-    <td><span class="zone-an">Anaerobic</span></td>
-    <td>4 L</td>
-    <td>Phosphorus release by PAOs; hydrolysis of complex organics</td>
-    <td>DO &lt; 0.5 mg/L · ORP: −200 to −50 mV</td>
+    <td><b>Primary Settling Tank (PST)</b></td>
+    <td>Removes settleable solids and reduces TSS/COD load before biological
+        treatment. Primary sludge (Q_Psludge) is withdrawn from the base.</td>
+    <td>DO near 0 · low MLSS (50–500 mg/L)</td>
   </tr>
   <tr>
     <td>2</td>
-    <td><span class="zone-ax">Anoxic</span></td>
-    <td>4 L</td>
-    <td>Denitrification: NO₃ → N₂ using return nitrate from aerobic zone</td>
-    <td>DO &lt; 0.5 mg/L · ORP: −100 to +50 mV</td>
+    <td><span class="zone-ae">Aeration Tank</span></td>
+    <td>Biological COD oxidation and nitrification (NH₄ → NO₃) by activated
+        sludge. Return Activated Sludge (RAS) from the Clarifier re-enters here.</td>
+    <td>DO 1.0–4.0 mg/L · MLSS 1 000–5 000 mg/L</td>
   </tr>
   <tr>
     <td>3</td>
-    <td><span class="zone-ae">Aerobic</span></td>
-    <td>4 L</td>
-    <td>COD oxidation, nitrification (NH₄ → NO₃), phosphorus uptake by PAOs</td>
-    <td>DO 1.0–2.0 mg/L · ORP: +50 to +200 mV</td>
+    <td><span class="zone-cl">Clarifier (Secondary)</span></td>
+    <td>Gravity settling separates biomass from treated water. Settled sludge
+        recycles as RAS; excess leaves as WAS to control SRT.</td>
+    <td>SVI &lt; 150 mL/g (good settling)</td>
   </tr>
   <tr>
     <td>4</td>
-    <td><span class="zone-cl">Clarifier</span></td>
-    <td>—</td>
-    <td>Gravity settling: sludge returns (RAS), clarified effluent exits at SP4</td>
-    <td>SVI &lt; 150 mL/g (good settling)</td>
+    <td><b>Effluent Storage</b></td>
+    <td>Clarified, treated water collected before discharge or analysis at SP4.</td>
+    <td>COD &lt; 100 mg/L · TSS &lt; 30 mg/L (target)</td>
   </tr>
 </table>
 
-<h3>Recycle Streams</h3>
+<h3>Recycle and Sludge Streams</h3>
 <ul>
-  <li><b>RAS (Return Activated Sludge)</b> — sludge from clarifier bottom pumped back
-      to the anaerobic zone inlet. Ratio target: 1:1 (Q_RAS = Q_in).</li>
-  <li><b>a-recycle (Internal recycle)</b> — mixed liquor from aerobic zone pumped back
-      to the anoxic zone. Carries NO₃ for denitrification. Target ratio: 4:1.</li>
-  <li><b>WAS (Waste Activated Sludge)</b> — excess sludge removed from the system
-      to control SRT. Controls the sludge age.</li>
+  <li><b>RAS (Return Activated Sludge)</b> — settled sludge from the Clarifier
+      pumped back to the Aeration Tank inlet by the Sediment Return Pump.
+      Maintains biomass concentration. Design ratio: 1:1 (Q_RAS = Q_in).</li>
+  <li><b>WAS (Waste Activated Sludge)</b> — excess sludge wasted from the Clarifier
+      to maintain SRT at target (~30 days). Controlled via Q_WAS in the Daily Log.</li>
+  <li><b>Primary Sludge (Q_Psludge)</b> — solids removed from the base of the PST.
+      Entered in the Daily Log Flow Readings section.</li>
 </ul>
+
+<div class="note"><b>CAS layout:</b> This reactor uses one aeration zone with no
+separate anoxic or anaerobic zones and no internal a-recycle loop. The focus is
+aerobic organic removal and PFAS fate tracking, not multi-zone BNR nutrient removal.</div>
 
 <h3>Sampling Points</h3>
 <table>
   <tr><th>Point</th><th>Location</th><th>What it tells you</th></tr>
-  <tr><td><b>SP1</b></td><td>Influent (feed tank)</td><td>Incoming CEC load; influent water quality</td></tr>
-  <tr><td><b>SP2</b></td><td>After anaerobic zone</td><td>CEC change through anaerobic phase</td></tr>
-  <tr><td><b>SP3</b></td><td>Clarifier outlet</td><td>Performance of biological treatment</td></tr>
-  <tr><td><b>SP4</b></td><td>Final effluent</td><td>Overall removal efficiency; discharge quality</td></tr>
+  <tr><td><b>SP1</b></td><td>Influent (feed tank)</td><td>Incoming CEC load; raw influent quality before any treatment</td></tr>
+  <tr><td><b>SP2</b></td><td>After Primary Settling Tank</td><td>Removal of settleable solids; pre-biological water quality</td></tr>
+  <tr><td><b>SP3</b></td><td>After Aeration Tank / Clarifier inlet</td><td>Biological treatment performance; mixed liquor quality</td></tr>
+  <tr><td><b>SP4</b></td><td>Final effluent (Effluent Storage)</td><td>Overall removal efficiency; treated water discharge quality</td></tr>
 </table>
-
-<h3>Total Reactor Volume</h3>
-<div class="eq">V_total = 3 zones × 4 L = 12 L</div>
 
 <div class="note"><b>OECD 303A:</b> This reactor configuration follows OECD Guideline 303A
 for activated sludge simulation tests — a standard method for assessing biodegradability
@@ -448,30 +450,30 @@ spike concentration, run type, or restart the reactor after a shutdown.</div>
 reactor zone every day. It links to the active experiment.</p>
 
 <h3>Zone Tabs</h3>
-<p>There are four tabs — one per zone. Measure and enter values for the
+<p>There are four tabs — one per treatment stage. Measure and enter values for the
 zones you sampled today. You can leave zones blank if not sampled.</p>
 
 <table>
-  <tr><th>Tab</th><th>Zone</th><th>Key parameters to monitor</th></tr>
+  <tr><th>Tab</th><th>Stage</th><th>Key parameters to monitor</th></tr>
   <tr>
-    <td><span class="zone-an">Anaerobic</span></td>
-    <td>Zone 1</td>
-    <td>DO (must be &lt; 0.5), pH, COD, PO₄ (releases here), ORP (negative)</td>
+    <td><b>Primary Settling</b></td>
+    <td>Primary Settling Tank</td>
+    <td>DO (near 0), pH, COD (incoming load), TSS (settlement performance)</td>
   </tr>
   <tr>
-    <td><span class="zone-ax">Anoxic</span></td>
-    <td>Zone 2</td>
-    <td>DO (must be &lt; 0.5), NO₃ (consumed here), ORP (slightly negative)</td>
+    <td><span class="zone-ae">Aeration Tank</span></td>
+    <td>Biological treatment</td>
+    <td>DO (must be 1.0–4.0), NH₄ (nitrification), COD (removal), MLSS, OUR</td>
   </tr>
   <tr>
-    <td><span class="zone-ae">Aerobic</span></td>
-    <td>Zone 3</td>
-    <td>DO (must be 1.0–2.0), NH₄ (should drop), OUR (activity indicator)</td>
+    <td><span class="zone-cl">Clarifier</span></td>
+    <td>Secondary clarifier</td>
+    <td>SVI (settling quality), TSS (overflow), DO (should be low)</td>
   </tr>
   <tr>
-    <td><span class="zone-cl">Effluent</span></td>
-    <td>SP4</td>
-    <td>COD, NH₄, PO₄, turbidity, TSS (effluent quality)</td>
+    <td><b>Effluent</b></td>
+    <td>SP4 — final treated water</td>
+    <td>COD, NH₄, PO₄, turbidity, TSS (effluent quality standards)</td>
   </tr>
 </table>
 
@@ -507,13 +509,13 @@ Click the <b>▶ Advanced Measurements</b> toggle in any zone tab to expand.</p>
 
 <h3>Flow Readings Section</h3>
 <p>Enter measured flow rates at the bottom of the page. These are required
-for the Mass Balance calculator.</p>
+for the Mass Balance calculator and HRT/SRT calculations.</p>
 <ul>
-  <li><b>Q_in</b> — influent pump flow (design: 320 mL/h)</li>
-  <li><b>Q_WAS</b> — waste sludge removed today (mL/h)</li>
-  <li><b>Q_Psludge</b> — primary sludge (if applicable)</li>
-  <li><b>RAS ratio</b> — return sludge ratio (design: 1.0)</li>
-  <li><b>a-recycle ratio</b> — internal recycle ratio (design: 4.0)</li>
+  <li><b>Q_in (Influent flow)</b> — influent pump setting (design: 320 mL/h)</li>
+  <li><b>Q_WAS (Waste sludge)</b> — volume wasted from Clarifier today (mL/h);
+      controls SRT — enter 0 only if no sludge was wasted.</li>
+  <li><b>Q_Psludge (Primary sludge)</b> — volume removed from the PST base (mL/h)</li>
+  <li><b>RAS ratio</b> — Return Activated Sludge pump ratio (design: 1.0)</li>
 </ul>
 
 <h3>Red Borders</h3>
@@ -659,14 +661,13 @@ specific reactor or wastewater.</p>
 <h4>What you can adjust</h4>
 <table>
   <tr><th>Parameter</th><th>Range</th><th>Effect on predictions</th></tr>
-  <tr><td>Flow rate</td><td>200–450 mL/h</td><td>Changes HRT → affects COD and NH₄ removal</td></tr>
-  <tr><td>DO (aerobic)</td><td>0–5 mg/L</td><td>Directly controls nitrification rate</td></tr>
-  <tr><td>SRT (Sludge age)</td><td>5–60 days</td><td>Low SRT → nitrifier washout warning</td></tr>
-  <tr><td>RAS ratio</td><td>0.5–3.0</td><td>Affects clarifier performance</td></tr>
-  <tr><td>a-recycle ratio</td><td>1–8</td><td>Controls denitrification and bio-P</td></tr>
+  <tr><td>Influent flow</td><td>100–500 mL/h</td><td>Changes HRT → affects COD and NH₄ removal</td></tr>
+  <tr><td>DO (aeration tank)</td><td>0–5 mg/L</td><td>Directly controls nitrification rate</td></tr>
+  <tr><td>Sludge age (SRT)</td><td>5–60 days</td><td>Low SRT → nitrifier washout warning</td></tr>
+  <tr><td>RAS ratio</td><td>0.1–4.0</td><td>Return sludge ratio; affects MLSS and clarifier load</td></tr>
   <tr><td>Temperature</td><td>15–35°C</td><td>All biological rates use θ^(T−20)</td></tr>
-  <tr><td>pH</td><td>5–10</td><td>Warns if outside 6.5–8.0</td></tr>
-  <tr><td>MLSS</td><td>500–100 000 mg/L</td><td>Controls PFAS adsorption via Kd model</td></tr>
+  <tr><td>pH</td><td>6–9</td><td>Warns if outside 6.5–8.0 optimum range</td></tr>
+  <tr><td>MLSS</td><td>1 000–100 000 mg/L</td><td>Controls PFAS adsorption via Kd model</td></tr>
 </table>
 
 <h4>Influent concentrations</h4>
@@ -895,24 +896,25 @@ the expected ranges for this reactor system.</p>
 
 <h3>Water Quality — Normal Operating Ranges</h3>
 <table>
-  <tr><th>Parameter</th><th>Unit</th><th>Anaerobic</th><th>Anoxic</th><th>Aerobic</th><th>Effluent</th></tr>
-  <tr><td>DO</td><td>mg/L</td><td>0–0.5</td><td>0–0.5</td><td><b>1.0–2.0</b></td><td>—</td></tr>
-  <tr><td>pH</td><td>—</td><td>6.5–8.0</td><td>6.5–8.0</td><td>6.5–8.0</td><td>6.0–9.0</td></tr>
-  <tr><td>Temperature</td><td>°C</td><td colspan="3" style="text-align:center">18–28</td><td>15–30</td></tr>
-  <tr><td>COD</td><td>mg/L</td><td>50–3000</td><td>20–1000</td><td>5–500</td><td>&lt;250</td></tr>
-  <tr><td>NH₄-N</td><td>mg/L</td><td>0–150</td><td>0–100</td><td>0–50</td><td>&lt;50</td></tr>
-  <tr><td>NO₃-N</td><td>mg/L</td><td>0–50</td><td>0–100</td><td>0–100</td><td>&lt;50</td></tr>
-  <tr><td>PO₄-P</td><td>mg/L</td><td>0–50</td><td>0–50</td><td>0–30</td><td>&lt;20</td></tr>
-  <tr><td>MLSS</td><td>mg/L</td><td colspan="3" style="text-align:center">1000–6000</td><td>&lt;100</td></tr>
-  <tr><td>ORP</td><td>mV</td><td>−300 to −50</td><td>−100 to +50</td><td>+50 to +200</td><td>—</td></tr>
+  <tr><th>Parameter</th><th>Unit</th><th>Primary Settling</th><th>Aeration Tank</th><th>Clarifier</th><th>Effluent</th></tr>
+  <tr><td>DO</td><td>mg/L</td><td>0–1.0</td><td><b>1.0–4.0</b></td><td>0–2.0</td><td>—</td></tr>
+  <tr><td>pH</td><td>—</td><td>6.5–8.5</td><td>6.5–8.0</td><td>6.5–8.5</td><td>6.0–9.0</td></tr>
+  <tr><td>Temperature</td><td>°C</td><td>15–30</td><td>18–28</td><td>15–30</td><td>15–30</td></tr>
+  <tr><td>COD</td><td>mg/L</td><td>50–3000</td><td>5–500</td><td>5–200</td><td>&lt;100</td></tr>
+  <tr><td>NH₄-N</td><td>mg/L</td><td>0–200</td><td>0–50</td><td>0–30</td><td>&lt;30</td></tr>
+  <tr><td>NO₃-N</td><td>mg/L</td><td>0–50</td><td>0–100</td><td>0–50</td><td>&lt;30</td></tr>
+  <tr><td>PO₄-P</td><td>mg/L</td><td>0–50</td><td>0–30</td><td>0–20</td><td>&lt;10</td></tr>
+  <tr><td>MLSS</td><td>mg/L</td><td>50–500</td><td>1 000–5 000</td><td>—</td><td>&lt;30</td></tr>
+  <tr><td>ORP</td><td>mV</td><td>—</td><td>+50 to +200</td><td>—</td><td>—</td></tr>
 </table>
 
 <h3>Flow Rates</h3>
 <table>
   <tr><th>Parameter</th><th>Unit</th><th>Design value</th><th>Operating range</th></tr>
   <tr><td>Q_in (influent)</td><td>mL/h</td><td>320</td><td>200–450</td></tr>
+  <tr><td>Q_WAS (waste sludge)</td><td>mL/h</td><td>—</td><td>0–200 (set to achieve SRT 30 d)</td></tr>
+  <tr><td>Q_Psludge (primary sludge)</td><td>mL/h</td><td>—</td><td>0–200</td></tr>
   <tr><td>RAS ratio</td><td>—</td><td>1.0</td><td>0.5–2.0</td></tr>
-  <tr><td>a-recycle ratio</td><td>—</td><td>4.0</td><td>2.0–6.0</td></tr>
   <tr><td>SRT</td><td>days</td><td>30</td><td>20–40</td></tr>
 </table>
 
@@ -936,6 +938,8 @@ the expected ranges for this reactor system.</p>
 <table>
   <tr><th>Abbreviation</th><th>Full name</th></tr>
   <tr><td>AS</td><td>Activated Sludge</td></tr>
+  <tr><td>CAS</td><td>Conventional Activated Sludge</td></tr>
+  <tr><td>PST</td><td>Primary Settling Tank</td></tr>
   <tr><td>BOD</td><td>Biochemical Oxygen Demand</td></tr>
   <tr><td>CEC</td><td>Contaminant of Emerging Concern</td></tr>
   <tr><td>COD</td><td>Chemical Oxygen Demand</td></tr>

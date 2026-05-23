@@ -23,6 +23,7 @@ Layout:
 import csv
 import os
 from datetime import date as dt_date
+from pathlib import Path
 
 import qtawesome as qta
 from PySide6.QtWidgets import (
@@ -38,8 +39,12 @@ from PySide6.QtCharts import (
 )
 
 from core.database import get_session
-from core.models import Experiment, CECReading, FlowReading, MassBalanceResult
+from core.models import (
+    Experiment, CECReading, FlowReading, MassBalanceResult,
+    DailyReading, SimulationRun,
+)
 from core.calculations import full_mass_balance
+from core.report_export import build_experiment_report
 from ui.theme import dark_date_edit_style
 
 C_HDR = "#2c3e50"
@@ -317,6 +322,20 @@ class MassBalanceScreen(QWidget):
         """)
         export_btn.clicked.connect(self._on_export)
         row.addWidget(export_btn)
+
+        excel_btn = QPushButton("  Export Full Report (Excel)")
+        excel_btn.setIcon(qta.icon("fa6s.file-excel", color="#fff"))
+        excel_btn.setIconSize(QSize(13, 13))
+        excel_btn.setFixedHeight(34)
+        excel_btn.setCursor(Qt.PointingHandCursor)
+        excel_btn.setStyleSheet("""
+            QPushButton { background:#1e8449; color:#fff; border:none;
+                border-radius:4px; font-size:11px; font-weight:600; padding:0 16px; }
+            QPushButton:hover { background:#27ae60; }
+            QPushButton:pressed { background:#145a32; }
+        """)
+        excel_btn.clicked.connect(self._on_export_excel)
+        row.addWidget(excel_btn)
         return bar
 
     # ── Calculate ──────────────────────────────────────────────────────────────
@@ -567,6 +586,118 @@ class MassBalanceScreen(QWidget):
                 f"Results saved to:\n{path}")
         except Exception as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
+
+    def _on_export_excel(self) -> None:
+        """Build a full multi-sheet Excel report for the active experiment."""
+        active = self._get_active_experiment()
+        if not active:
+            QMessageBox.warning(self, "No Active Experiment",
+                "Please set an active experiment first.")
+            return
+
+        default_name = f"reactor_report_{active['name'].replace(' ', '_')[:40]}.xlsx"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Experiment Report", default_name,
+            "Excel files (*.xlsx)"
+        )
+        if not path:
+            return
+
+        try:
+            with get_session() as session:
+                exp = session.query(Experiment).filter_by(id=active["id"]).first()
+                exp_data = {
+                    "name":        exp.name,
+                    "start_date":  exp.start_date,
+                    "end_date":    exp.end_date,
+                    "description": exp.description,
+                    "cec_spiked":  exp.cec_spiked,
+                    "spike_conc":  exp.spike_conc,
+                }
+
+                daily_rows = (
+                    session.query(DailyReading)
+                    .filter_by(experiment_id=active["id"])
+                    .order_by(DailyReading.reading_date, DailyReading.zone)
+                    .all()
+                )
+                daily_data = [
+                    {c: getattr(r, c) for c in [
+                        "reading_date", "zone", "do_mgl", "ph", "temperature_c",
+                        "cod_mgl", "nh4_mgl", "no3_mgl", "so4_mgl", "po4_mgl",
+                        "mlss_mgl", "vss_mgl", "tn_mgl", "tp_mgl",
+                        "orp_mv", "turbidity_ntu", "our_mgl_h", "notes",
+                    ]}
+                    for r in daily_rows
+                ]
+
+                # Build CEC groups (one entry per date+compound)
+                from collections import defaultdict
+                cec_rows = (
+                    session.query(CECReading)
+                    .filter_by(experiment_id=active["id"])
+                    .order_by(CECReading.reading_date, CECReading.cec_name)
+                    .all()
+                )
+                groups: dict[tuple, dict] = defaultdict(lambda: {
+                    "date": None, "cec_name": "", "cec_type": "",
+                    "method": "", "sp1": None, "sp2": None, "sp3": None, "sp4": None,
+                })
+                sp_map = {
+                    "SP1_influent": "sp1", "SP2_primary": "sp2",
+                    "SP3_clarifier": "sp3", "SP4_effluent": "sp4",
+                }
+                for r in cec_rows:
+                    key = (str(r.reading_date), r.cec_name)
+                    g = groups[key]
+                    g["date"] = r.reading_date
+                    g["cec_name"] = r.cec_name
+                    g["cec_type"] = r.cec_type or ""
+                    g["method"] = r.analysis_method or ""
+                    sp = sp_map.get(r.sampling_point)
+                    if sp:
+                        g[sp] = (None if r.below_detection else r.concentration)
+                cec_groups = list(groups.values())
+
+                mb_rows = (
+                    session.query(MassBalanceResult)
+                    .filter_by(experiment_id=active["id"])
+                    .order_by(MassBalanceResult.calculation_date)
+                    .all()
+                )
+                mb_data = [
+                    {
+                        "calculation_date": r.calculation_date,
+                        "cec_name":         r.cec_name,
+                        "mass_in_mgday":    r.mass_in_mgday,
+                        "mass_eff_mgday":   r.mass_eff_mgday,
+                        "mass_sludge_mgday":r.mass_sludge_mgday,
+                        "mass_transformed": r.mass_transformed,
+                        "removal_pct":      r.removal_pct,
+                        "q_eff_mlday":      r.q_eff_mlday,
+                    }
+                    for r in mb_rows
+                ]
+
+                sim_rows = session.query(SimulationRun).order_by(SimulationRun.run_date).all()
+                sim_data = [
+                    {c: getattr(r, c) for c in [
+                        "run_date", "model_type", "flow_rate_mlh", "do_mgl",
+                        "srt_days", "ras_ratio", "temp_c", "ph",
+                        "inf_cod", "inf_nh4", "inf_pfas", "pfas_type",
+                        "pred_cod_removal", "pred_nh4_removal",
+                        "pred_tp_removal", "pred_pfas_removal",
+                    ]}
+                    for r in sim_rows
+                ]
+
+            build_experiment_report(path, exp_data, daily_data, cec_groups, mb_data, sim_data)
+            QMessageBox.information(self, "Report Exported",
+                f"Full experiment report saved to:\n{path}\n\n"
+                f"Sheets: Summary, Daily Readings, CEC Readings, Mass Balance, Simulations")
+
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", f"Could not generate report:\n\n{exc}")
 
     # ── Database helpers ───────────────────────────────────────────────────────
     def _get_active_experiment(self) -> dict | None:
