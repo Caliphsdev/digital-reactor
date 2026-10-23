@@ -63,7 +63,7 @@ Built for PhD research at the **Department of Environmental Management**, as a d
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-username/digital-reactor.git
+git clone https://github.com/Caliphsdev/digital-reactor.git
 cd digital-reactor
 
 # 2. Create a virtual environment
