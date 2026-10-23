@@ -67,6 +67,7 @@ $RECYCLE.BIN/
 # ── Chart exports & generated output ─────────────────────────────────────────
 exports/
 *.png
+!Docs/screenshots/*.png
 *.csv
 
 # ── Packaging / distribution ──────────────────────────────────────────────────
