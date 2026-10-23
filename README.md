@@ -6,6 +6,37 @@ Built for PhD research at the **Department of Environmental Management**, as a d
 
 ---
 
+## Screenshots
+
+> All screenshots below use **synthetic demo data** generated for this README. No real experimental results are shown.
+
+**Live reactor overview** with real-time readings, sampling points and recycle streams:
+
+![Reactor overview](Docs/screenshots/01-reactor-overview.png)
+
+**Mass balance** — each step of the calculation is shown with the numbers filled in, plus a fate breakdown of where the contaminant went:
+
+![Mass balance](Docs/screenshots/03-mass-balance.png)
+
+**Simulation** — adjust operating conditions and see predicted removal for COD, ammonia, phosphorus and PFAS:
+
+![Simulation](Docs/screenshots/04-simulation.png)
+
+<details>
+<summary>More screens: daily log and CEC trends</summary>
+
+**Daily log** with per-zone water quality entry and out-of-range flagging:
+
+![Daily log](Docs/screenshots/02-daily-log.png)
+
+**Dashboard** — concentration trends at each sampling point over time:
+
+![CEC trends](Docs/screenshots/05-cec-trends.png)
+
+</details>
+
+---
+
 ## Features
 
 - **Live Reactor Diagram** — Animated process flow showing all zones, recycle streams, and sampling points with real-time data overlays
